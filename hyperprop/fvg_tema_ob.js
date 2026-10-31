@@ -290,9 +290,19 @@ function addOb(obs, bull, bar, created, top, bot, max) {
 // x = bar index, y = price, as described in the editor's header comment.
 // ═════════════════════════════════════════════════════════════════════════════
 function withAlpha(hex, alpha) {
-  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
-  const a = Math.round(alpha * 255).toString(16).padStart(2, '0');
-  return hex + a;
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}/i.test(hex)) return hex;
+  const n = parseInt(hex.slice(1, 7), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+// Hyperprop's exact field names for box / line colours aren't documented to us,
+// so each shape carries the common aliases. Unused keys are simply ignored.
+function box(x1, y1, x2, y2, fill, border, text) {
+  return { x1, y1, x2, y2, color: fill, fillColor: fill, fill, backgroundColor: fill, bgColor: fill,
+    borderColor: border, lineColor: border, stroke: border, text, textColor: border };
+}
+function line(x1, y1, x2, y2, color, style, width, text) {
+  return { x1, y1, x2, y2, color, lineColor: color, stroke: color, style, lineStyle: style, width, lineWidth: width, text };
 }
 
 function render(r, s) {
@@ -317,15 +327,15 @@ function render(r, s) {
   }
 
   if (s.showSwings) {
-    if (r.swingHi) lines.push({ x1: r.swingHi.bar, y1: r.swingHi.price, x2: r.last, y2: r.swingHi.price, color: C.swingHi, style: 'dashed', width: 1, text: 'Swing High' });
-    if (r.swingLo) lines.push({ x1: r.swingLo.bar, y1: r.swingLo.price, x2: r.last, y2: r.swingLo.price, color: C.swingLo, style: 'dashed', width: 1, text: 'Swing Low' });
+    if (r.swingHi) lines.push(line(r.swingHi.bar, r.swingHi.price, r.last, r.swingHi.price, C.swingHi, 'dashed', 1, 'Swing High'));
+    if (r.swingLo) lines.push(line(r.swingLo.bar, r.swingLo.price, r.last, r.swingLo.price, C.swingLo, 'dashed', 1, 'Swing Low'));
   }
 
   if (s.showOb) {
     for (const ob of r.obs) {
       if (ob.end !== null && ob.end <= ob.created) continue; // retired right away
       const col = ob.bull ? C.obBull : C.obBear;
-      boxes.push({ x1: ob.bar, y1: ob.top, x2: ob.end ?? r.last, y2: ob.bot, color: withAlpha(col, 0.15), borderColor: col, text: ob.bull ? 'Bull OB' : 'Bear OB' });
+      boxes.push(box(ob.bar, ob.top, ob.end ?? r.last, ob.bot, withAlpha(col, 0.2), col, ob.bull ? 'Bull OB' : 'Bear OB'));
     }
   }
 
@@ -333,11 +343,11 @@ function render(r, s) {
     for (const tr of r.trades) {
       const col = tr.side === 'long' ? C.buy : C.sell;
       const x2 = tr.exit ?? r.last;
-      boxes.push({ x1: tr.fvgBar, y1: tr.top, x2, y2: tr.bot, color: withAlpha(col, tr.status === 'cancelled' ? 0.08 : 0.25), borderColor: col });
+      boxes.push(box(tr.fvgBar, tr.top, x2, tr.bot, withAlpha(col, tr.status === 'cancelled' ? 0.08 : 0.3), col, 'FVG'));
       if (tr.status === 'cancelled') continue;
-      lines.push({ x1: tr.setup, y1: tr.entry, x2, y2: tr.entry, color: C.entry, style: 'solid', width: 2 });
-      lines.push({ x1: tr.setup, y1: tr.stop, x2, y2: tr.stop, color: C.sl, style: 'dotted', width: 2 });
-      lines.push({ x1: tr.setup, y1: tr.tp, x2, y2: tr.tp, color: C.tp, style: 'dotted', width: 2 });
+      lines.push(line(tr.setup, tr.entry, x2, tr.entry, C.entry, 'solid', 2));
+      lines.push(line(tr.setup, tr.stop, x2, tr.stop, C.sl, 'dotted', 2));
+      lines.push(line(tr.setup, tr.tp, x2, tr.tp, C.tp, 'dotted', 2));
     }
     for (const e of r.events) {
       const tr = e.trade;
