@@ -1,5 +1,5 @@
 // FVG Breakaway + TEMA 8/55 + Order Blocks — Hyperprop Script
-// Set "Pane" to the price chart (overlay), not "Separate pane".
+// Set "Pane" to **Overlay** (draws on the price chart), not "Separate pane".
 //
 // Every feature can be switched On/Off independently:
 //   • FVG strategy  – most recent swing high/low break -> FVG limit entry, SL, TP (1R), BUY/SELL arrows

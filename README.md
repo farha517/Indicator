@@ -17,7 +17,7 @@ The **TEMA filter for FVG trades** (Trend / Recent cross / Off) controls whether
 
 ## Add it in Hyperprop
 1. Open the script editor (**New script**).
-2. Name it. Set **Pane** to the price chart (not "Separate pane").
+2. Name it. Set **Pane** to **Overlay** (not "Separate pane").
 3. Replace all of the template source with the contents of `hyperprop/fvg_tema_ob.js`.
 4. Tap **Save & add to chart**. All settings show up in the indicator's settings dialog.
 
