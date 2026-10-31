@@ -1,43 +1,36 @@
-# Breakaway FVG + TEMA 8/55 + Order Blocks
+# FVG Breakaway + TEMA 8/55 + Order Blocks — Hyperprop Script
 
-An indicator that combines a Fair Value Gap (FVG) break-and-retest strategy with a TEMA 8/55 trend filter and order blocks. It's built for MNQ, MYM and MGC on the 2m and 15s charts.
+A custom indicator for **Hyperprop** (app.hyperprop.com) charts, built for MNQ, MYM and MGC on the 2m and 15s timeframes.
 
-There are two versions:
-- **`tradingview/fvg_tema_ob.pine`** is the main one. It runs directly on your TradingView charts, including the mobile app.
-- **`hyperprop_indicator/`** is a Python backtester for exported candle CSVs.
+**File to paste into Hyperprop:** [`hyperprop/fvg_tema_ob.js`](hyperprop/fvg_tema_ob.js)
 
-## How it works
-1. **Range High / Range Low** are the latest confirmed swing high and swing low. You can switch this to a session time window instead.
-2. A candle **closes** through the Range High (bullish) or Range Low (bearish).
-3. The FVG left by that impulse move becomes the **setup zone**. A limit order is placed at the gap with a **stop-loss** and a **take-profit at 1R**.
-4. When price comes back and taps the limit, a **BUY / SELL arrow** appears and an alert fires. When the trade closes, a WIN 🎉 or SL label appears and the win streak updates.
-5. **TEMA 8 / 55 filter:** longs only when TEMA 8 > TEMA 55, shorts only when it's below. The background is green or red to match.
-6. **Order blocks:** every break also marks the last opposite-colour candle before the move (a bullish OB is the last red candle before the push up). The box extends right until price closes through it. You get an alert the first time price taps it.
+## Features (each one can be switched On/Off)
+| Feature | What it shows |
+|---|---|
+| **FVG strategy** | When a candle closes through the **most recent swing high/low**, it boxes the Fair Value Gap left by that move. It then draws an entry line, a stop-loss and a 1R take-profit. You get a BUY/SELL arrow when price taps the entry, and a WIN 🔥 or SL label when the trade ends. |
+| **Order blocks** | The last opposite-colour candle before each break of a swing (a bullish OB is the last red candle before the push up). It stays on the chart until a candle closes through it. |
+| **TEMA lines** | TEMA 8 and TEMA 55, with dots where they cross |
+| **TEMA trend background** | Green when TEMA 8 > TEMA 55, red when it's below |
+| **Swing high / low lines** | The most recent swing high and swing low |
 
-## Install on TradingView
-1. On tradingview.com (in a browser), open a chart, then click **Pine Editor** at the bottom.
-2. Delete the template code. Paste in everything from `tradingview/fvg_tema_ob.pine`.
-3. Click **Save**, then **Add to chart**.
-4. On your phone it now shows under **Indicators → My scripts**.
-5. **Alerts:** open Create alert, set the condition to this indicator, and choose **"Any alert() function call"**. That alert includes the entry, SL and TP prices. You can also pick a single event instead, such as "BUY filled".
+The **TEMA filter for FVG trades** (Trend / Recent cross / Off) controls whether FVG setups must agree with the TEMA trend. Every colour can be changed in the settings.
 
-### Main settings (gear icon)
-| Setting | Default | Notes |
-|---|---|---|
-| Range source | Swing pivots | Or "Session range" (e.g. 09:30–09:45 New York time) |
-| Swing strength | 5 | Candles needed on each side of a swing. Lower it for more, smaller swings |
-| Limit entry | FVG edge | Or FVG 50% |
-| Stop-loss | Swing (+2 ticks) | Or just beyond the FVG |
-| Take-profit (R) | 1.0 | |
-| Cancel limit after | 30 candles | |
-| TEMA filter | Trend | "Recent cross" also needs a fresh cross. "Off" turns the filter off |
-| Order blocks | On, 4 per side | |
+## Add it in Hyperprop
+1. Open the script editor (**New script**).
+2. Name it. Set **Pane** to the price chart (not "Separate pane").
+3. Replace all of the template source with the contents of `hyperprop/fvg_tema_ob.js`.
+4. Tap **Save & add to chart**. All settings show up in the indicator's settings dialog.
 
-The script only acts on **closed** candles, so arrows don't repaint.
+Set **Tick size** to match the contract you trade: MNQ 0.25, MYM 1, MGC 0.1. It's used for the stop buffer.
+
+## Tests
+```bash
+node hyperprop/test/run_tests.js
+```
 
 ---
 
-## Python backtester (optional)
+## Python backtester (optional, for exported candle CSVs)
 ### Setup
 ```bash
 pip install -r requirements.txt
