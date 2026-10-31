@@ -21,7 +21,8 @@ from .signals import Settings, run
 def _settings(a: argparse.Namespace) -> Settings:
     return Settings(tema_fast=a.tema_fast, tema_slow=a.tema_slow, swing_left=a.swing, swing_right=a.swing,
                     entry_mode=a.entry, sl_mode=a.sl, sl_buffer_pct=a.sl_buffer, rr=a.rr,
-                    expiry_bars=a.expiry, trend_filter=a.filter, cross_lookback=a.cross_lookback)
+                    expiry_bars=a.expiry, trend_filter=a.filter, cross_lookback=a.cross_lookback,
+                    ob_search=a.ob_search)
 
 
 def _load(a: argparse.Namespace) -> pd.DataFrame:
@@ -103,11 +104,12 @@ def main() -> None:
         sp.add_argument("--entry", choices=["edge", "mid"], default="edge", help="limit at FVG edge or 50%%")
         sp.add_argument("--sl", choices=["swing", "fvg"], default="swing", help="stop beyond leg extreme or FVG")
         sp.add_argument("--sl-buffer", type=float, default=0.0, help="extra stop padding in %%")
-        sp.add_argument("--rr", type=float, default=2.0, help="take profit as a multiple of risk")
+        sp.add_argument("--rr", type=float, default=1.0, help="take profit as a multiple of risk")
         sp.add_argument("--expiry", type=int, default=30, help="cancel unfilled limit after N bars")
         sp.add_argument("--filter", choices=["trend", "cross", "none"], default="trend",
                         help="trend: TEMA fast vs slow must agree; cross: recent TEMA cross required; none: off")
         sp.add_argument("--cross-lookback", type=int, default=20)
+        sp.add_argument("--ob-search", type=int, default=10, help="candles to search for the order-block candle")
         if name == "chart":
             sp.add_argument("--csv", help="use a CSV of candles instead of Hyperliquid")
             sp.add_argument("--out", help="output HTML file")

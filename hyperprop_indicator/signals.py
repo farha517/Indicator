@@ -38,13 +38,14 @@ class Settings:
     # "fvg"   = stop beyond the far edge of the gap
     sl_mode: Literal["swing", "fvg"] = "swing"
     sl_buffer_pct: float = 0.0  # extra % padding added to the stop
-    rr: float = 2.0  # take profit = entry +/- rr * risk
+    rr: float = 1.0  # take profit = entry +/- rr * risk
     expiry_bars: int = 30  # cancel the limit if not filled within N bars
     # "trend" = TEMA fast above slow for longs (below for shorts)
     # "cross" = a TEMA cross in the trade's direction within `cross_lookback` bars
     # "none"  = raw FVG strategy, no TEMA filter
     trend_filter: Literal["trend", "cross", "none"] = "trend"
     cross_lookback: int = 20
+    ob_search: int = 10  # candles to look back from the leg extreme for the OB candle
 
 
 @dataclass
@@ -66,9 +67,21 @@ class Trade:
 
 
 @dataclass
+class OrderBlock:
+    side: Literal["bull", "bear"]
+    bar: int  # the OB candle
+    created_bar: int  # break of structure that confirmed it
+    top: float
+    bottom: float
+    end_bar: Optional[int] = None  # candle that closed through it (None = still active)
+    tapped_bar: Optional[int] = None
+
+
+@dataclass
 class Result:
     df: pd.DataFrame
     trades: list[Trade] = field(default_factory=list)
+    order_blocks: list[OrderBlock] = field(default_factory=list)
     settings: Settings = field(default_factory=Settings)
 
     def trades_frame(self) -> pd.DataFrame:
@@ -146,6 +159,8 @@ def run(df: pd.DataFrame, s: Settings | None = None) -> Result:
         return len(recent) > 0 and still
 
     trades: list[Trade] = []
+    obs: list[OrderBlock] = []
+    opn = df["open"].values
     pending: dict[str, Optional[Trade]] = {"long": None, "short": None}
     open_trades: list[Trade] = []
     last_sh: Optional[tuple[int, float]] = None  # (bar, price) of latest confirmed swing high
@@ -154,6 +169,15 @@ def run(df: pd.DataFrame, s: Settings | None = None) -> Result:
 
     for t in range(n):
         ts = times[t]
+
+        # 0) Order blocks: invalidate on a close through, record first tap
+        for ob in obs:
+            if ob.end_bar is not None or t <= ob.created_bar:
+                continue
+            if (ob.side == "bull" and close[t] < ob.bottom) or (ob.side == "bear" and close[t] > ob.top):
+                ob.end_bar = t
+            elif ob.tapped_bar is None and ((ob.side == "bull" and low[t] <= ob.top) or (ob.side == "bear" and high[t] >= ob.bottom)):
+                ob.tapped_bar = t
 
         # 1) Manage open trades (stop checked first = conservative)
         for tr in list(open_trades):
@@ -204,6 +228,10 @@ def run(df: pd.DataFrame, s: Settings | None = None) -> Result:
         if last_sh and not sh_used and close[t] > last_sh[1]:
             sh_used = True
             leg_start = last_sh[0] + int(np.argmin(low[last_sh[0]:t + 1]))
+            for j in range(leg_start, max(leg_start - s.ob_search, 0) - 1, -1):
+                if close[j] < opn[j]:  # last bearish candle before the up-move
+                    obs.append(OrderBlock("bull", j, t, high[j], low[j]))
+                    break
             fvg = _find_fvg(df, leg_start, t, "long")
             if fvg and trend_ok("long", t):
                 k, top, bottom = fvg
@@ -221,6 +249,10 @@ def run(df: pd.DataFrame, s: Settings | None = None) -> Result:
         if last_sl and not sl_used and close[t] < last_sl[1]:
             sl_used = True
             leg_start = last_sl[0] + int(np.argmax(high[last_sl[0]:t + 1]))
+            for j in range(leg_start, max(leg_start - s.ob_search, 0) - 1, -1):
+                if close[j] > opn[j]:  # last bullish candle before the down-move
+                    obs.append(OrderBlock("bear", j, t, high[j], low[j]))
+                    break
             fvg = _find_fvg(df, leg_start, t, "short")
             if fvg and trend_ok("short", t):
                 k, top, bottom = fvg
@@ -235,4 +267,4 @@ def run(df: pd.DataFrame, s: Settings | None = None) -> Result:
                     trades.append(tr)
                     df.at[t, "short_setup"] = True
 
-    return Result(df=df, trades=trades, settings=s)
+    return Result(df=df, trades=trades, order_blocks=obs, settings=s)

@@ -34,7 +34,7 @@ def _break_and_retest():
 
 
 def test_bullish_break_retest_produces_winning_long():
-    res = run(_break_and_retest(), Settings(swing_left=3, swing_right=3, trend_filter="none"))
+    res = run(_break_and_retest(), Settings(swing_left=3, swing_right=3, trend_filter="none", rr=2.0))
     first = res.trades[0]
     assert first.side == "long" and first.setup_bar == 80
     assert (first.entry, first.stop) == (105.5, 102.5)
@@ -58,3 +58,13 @@ def test_no_lookahead():
     part = run(df.iloc[:400], Settings(swing_left=3, swing_right=3)).df
     cols = ["long_setup", "short_setup", "long_entry", "short_entry", "tema_bull_cross", "tema_bear_cross"]
     pd.testing.assert_frame_equal(full.loc[:399, cols], part[cols])
+
+
+def test_bullish_order_block_is_last_down_candle_before_break():
+    res = run(_break_and_retest(), Settings(swing_left=3, swing_right=3, trend_filter="none"))
+    bull = [ob for ob in res.order_blocks if ob.side == "bull"]
+    assert bull and bull[0].created_bar == 80
+    ob = bull[0]
+    df = res.df
+    assert df.loc[ob.bar, "close"] < df.loc[ob.bar, "open"]
+    assert ob.bar == 77  # the pullback's last bearish candle (leg low)

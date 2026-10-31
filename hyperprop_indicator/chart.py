@@ -24,6 +24,7 @@ def _trend_segments(df: pd.DataFrame):
 
 def build_chart(res: Result, title: str = "FVG + TEMA Cross") -> go.Figure:
     df, s = res.df, res.settings
+    last_time = df["time"].iloc[-1]
     fig = go.Figure()
 
     # Background colour = TEMA trend (fast above slow = green, below = red)
@@ -52,8 +53,14 @@ def build_chart(res: Result, title: str = "FVG + TEMA Cross") -> go.Figure:
     fig.add_trace(go.Scatter(x=sc["time"], y=sc["tema_fast"], mode="markers", name="TEMA bear cross",
                              marker=dict(symbol="circle", size=7, color=BEAR, line=dict(color="white", width=1))))
 
+    # Order blocks: from the OB candle until price closes through them
+    for ob in res.order_blocks:
+        end = df["time"].iloc[ob.end_bar] if ob.end_bar is not None else last_time
+        color = BULL if ob.side == "bull" else BEAR
+        fig.add_shape(type="rect", x0=df["time"].iloc[ob.bar], x1=end, y0=ob.bottom, y1=ob.top,
+                      fillcolor=color, opacity=0.10, line=dict(color=color, width=1, dash="dot"))
+
     # FVG zones + entry / SL / TP lines for every setup
-    last_time = df["time"].iloc[-1]
     for tr in res.trades:
         x0 = tr.setup_time
         x1 = tr.exit_time or tr.fill_time or last_time
