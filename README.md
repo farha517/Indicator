@@ -7,8 +7,8 @@ A custom indicator for **Hyperprop** (app.hyperprop.com) charts, built for MNQ, 
 ## Features (each one can be switched On/Off)
 | Feature | What it shows |
 |---|---|
-| **FVG strategy** | When a candle closes through the **most recent swing high/low**, it boxes the Fair Value Gap left by that move. It then draws an entry line, a stop-loss and a 1R take-profit. You get a BUY/SELL arrow when price taps the entry, and a WIN 🔥 or SL label when the trade ends. |
-| **Order blocks** | The last opposite-colour candle before each break of a swing (a bullish OB is the last red candle before the push up). It stays on the chart until a candle closes through it. |
+| **FVG strategy** | When a candle closes through the **most recent swing high/low**, it boxes the Fair Value Gap left by that move. It draws a yellow entry line, a red dotted stop-loss and a green dotted 1R take-profit, with price tags (`BUY LIMIT 28517.25`, `SL …`, `TP …`) at the right edge. You get a BUY/SELL arrow when price taps the entry, and a WIN 🔥 or SL label when the trade ends. Only the live setup is drawn unless **Show past FVG trades** is On. |
+| **Order blocks** | The last opposite-colour candle before each break of a swing (a bullish OB is the last red candle before the push up). Only the most recent unbroken OB per side is shown by default. Raise **Max active OBs per side** for more, or turn on **Show broken order blocks**. |
 | **TEMA lines** | TEMA 8 and TEMA 55, with dots where they cross |
 | **TEMA trend background** | Green when TEMA 8 > TEMA 55, red when it's below |
 | **Swing high / low lines** | The most recent swing high and swing low |

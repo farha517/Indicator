@@ -65,7 +65,7 @@ test('toggles: FVG off still draws OBs and TEMA; everything off draws nothing', 
 });
 
 test('custom colours are used', () => {
-  const out = compute(breakAndRetest(), { 'Bullish order block': '#123456' });
+  const out = compute(breakAndRetest(), { 'Bullish order block': '#123456', 'Show broken order blocks': 'On' });
   assert.ok(out.boxes.some((b) => b.borderColor === '#123456'));
 });
 
@@ -76,6 +76,29 @@ test('no look-ahead: signals on the first 400 candles match a run on all 600', (
   const bars = frame(closes, 0.8);
   const key = (r, upto) => JSON.stringify(r.events.filter((e) => e.bar < upto).map((e) => [e.bar, e.type]));
   assert.strictEqual(key(analyse(bars, base({})), 400), key(analyse(bars.slice(0, 400), base({})), 400));
+});
+
+test('only the live FVG setup is drawn by default, with price tags', () => {
+  // cut the data right after the setup so it is still pending
+  const bars = breakAndRetest().slice(0, 82);
+  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3 });
+  assert.ok(out.markers.some((m) => m.text === 'BUY LIMIT 105.50'), JSON.stringify(out.markers.map((m) => m.text)));
+  assert.ok(out.markers.some((m) => m.text === 'SL 102.00'));
+  assert.ok(out.markers.some((m) => m.text === 'TP 109.00'));
+  // finished trades are hidden unless "Show past FVG trades" is On
+  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3 });
+  assert.ok(!done.boxes.some((b) => b.text === '' && b.y1 === 105.5));
+  const past = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On' });
+  assert.ok(past.boxes.some((b) => b.y1 === 105.5));
+});
+
+test('broken order blocks are hidden by default', () => {
+  let x = 100, seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  const bars = frame(Array.from({ length: 800 }, () => (x += rand() * 2)), 0.8);
+  const out = compute(bars, { 'Max active OBs per side': 1 });
+  const obBoxes = out.boxes.filter((b) => /OB$/.test(b.text));
+  assert.ok(obBoxes.length <= 2, obBoxes.length);
 });
 
 console.log(`\n${passed} tests passed`);

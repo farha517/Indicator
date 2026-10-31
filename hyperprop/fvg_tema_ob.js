@@ -13,6 +13,8 @@ const showOb     = input.select('Order blocks', 'On', ['On', 'Off']);
 const showTema   = input.select('TEMA lines', 'On', ['On', 'Off']);
 const showBg     = input.select('TEMA trend background', 'On', ['On', 'Off']);
 const showSwings = input.select('Swing high / low lines', 'On', ['On', 'Off']);
+const showPast   = input.select('Show past FVG trades', 'Off', ['On', 'Off']);
+const showObOld  = input.select('Show broken order blocks', 'Off', ['On', 'Off']);
 
 // ── Structure ────────────────────────────────────────────────────────────────
 const swingLen = input.int('Swing strength (candles each side)', 5, { min: 1, max: 50 });
@@ -32,7 +34,7 @@ const temaFastLen = input.int('TEMA fast', 8, { min: 1, max: 500 });
 const temaSlowLen = input.int('TEMA slow', 55, { min: 2, max: 500 });
 
 // ── Order blocks ─────────────────────────────────────────────────────────────
-const obMax    = input.int('Max active OBs per side', 4, { min: 1, max: 20 });
+const obMax    = input.int('Max active OBs per side', 1, { min: 1, max: 20 });
 const obSearch = input.int('Candles to search for OB candle', 10, { min: 1, max: 50 });
 
 // ── Colours ──────────────────────────────────────────────────────────────────
@@ -69,6 +71,8 @@ function readSettings(inputs) {
     showTema: on(v('TEMA lines', 'showTema', showTema)),
     showBg: on(v('TEMA trend background', 'showBg', showBg)),
     showSwings: on(v('Swing high / low lines', 'showSwings', showSwings)),
+    showPast: on(v('Show past FVG trades', 'showPast', showPast)),
+    showObOld: on(v('Show broken order blocks', 'showObOld', showObOld)),
     swingLen: Number(v('Swing strength (candles each side)', 'swingLen', swingLen)),
     entryMode: v('Limit entry', 'entryMode', entryMode),
     slMode: v('Stop-loss at', 'slMode', slMode),
@@ -297,9 +301,11 @@ function withAlpha(hex, alpha) {
 
 // Hyperprop's exact field names for box / line colours aren't documented to us,
 // so each shape carries the common aliases. Unused keys are simply ignored.
-function box(x1, y1, x2, y2, fill, border, text) {
-  return { x1, y1, x2, y2, color: fill, fillColor: fill, fill, backgroundColor: fill, bgColor: fill,
-    borderColor: border, lineColor: border, stroke: border, text, textColor: border };
+function box(x1, y1, x2, y2, hex, alpha, text) {
+  const rgba = withAlpha(hex, alpha);
+  return { x1, y1, x2, y2, color: hex, opacity: alpha, fillOpacity: alpha, fillColor: rgba, fill: rgba,
+    backgroundColor: rgba, bgColor: rgba, background: rgba, bg: rgba,
+    borderColor: hex, border: hex, lineColor: hex, stroke: hex, text, textColor: hex };
 }
 function line(x1, y1, x2, y2, color, style, width, text) {
   return { x1, y1, x2, y2, color, lineColor: color, stroke: color, style, lineStyle: style, width, lineWidth: width, text };
@@ -335,19 +341,33 @@ function render(r, s) {
     for (const ob of r.obs) {
       if (ob.end !== null && ob.end <= ob.created) continue; // retired right away
       const col = ob.bull ? C.obBull : C.obBear;
-      boxes.push(box(ob.bar, ob.top, ob.end ?? r.last, ob.bot, withAlpha(col, 0.2), col, ob.bull ? 'Bull OB' : 'Bear OB'));
+      if (ob.end !== null && !s.showObOld) continue; // only live (unbroken) OBs
+      boxes.push(box(ob.bar, ob.top, ob.end ?? r.last, ob.bot, col, 0.2, ob.bull ? 'Bull OB' : 'Bear OB'));
     }
   }
 
   if (s.showFvg) {
+    const dec = (String(s.tickSize).split('.')[1] || '').length; // MNQ 0.25 -> 2, MYM 1 -> 0, MGC 0.1 -> 1
+    const fmt = (p) => (Math.round(p / s.tickSize) * s.tickSize).toFixed(dec);
     for (const tr of r.trades) {
-      const col = tr.side === 'long' ? C.buy : C.sell;
-      const x2 = tr.exit ?? r.last;
-      boxes.push(box(tr.fvgBar, tr.top, x2, tr.bot, withAlpha(col, tr.status === 'cancelled' ? 0.08 : 0.3), col, 'FVG'));
+      const live = tr.status === 'pending' || tr.status === 'open';
+      if (!live && !s.showPast) continue;
       if (tr.status === 'cancelled') continue;
-      lines.push(line(tr.setup, tr.entry, x2, tr.entry, C.entry, 'solid', 2));
-      lines.push(line(tr.setup, tr.stop, x2, tr.stop, C.sl, 'dotted', 2));
-      lines.push(line(tr.setup, tr.tp, x2, tr.tp, C.tp, 'dotted', 2));
+      const col = tr.side === 'long' ? C.buy : C.sell;
+      const x2 = live ? r.last : tr.exit;
+      // Setup zone (the FVG) + entry / stop / target
+      boxes.push(box(tr.fvgBar, tr.top, x2, tr.bot, col, 0.3, ''));
+      lines.push(line(tr.fvgBar, tr.entry, x2, tr.entry, C.entry, 'solid', 2));
+      lines.push(line(tr.fvgBar, tr.stop, x2, tr.stop, C.sl, 'dotted', 2));
+      lines.push(line(tr.fvgBar, tr.tp, x2, tr.tp, C.tp, 'dotted', 2));
+      if (live) {
+        // Price tags at the right edge so the levels are readable
+        const above = tr.side === 'long' ? 'below' : 'above';
+        const tag = tr.status === 'pending' ? (tr.side === 'long' ? 'BUY LIMIT' : 'SELL LIMIT') : (tr.side === 'long' ? 'LONG' : 'SHORT');
+        markers.push({ x: r.last, y: tr.entry, shape: 'label', position: 'right', color: C.entry, text: `${tag} ${fmt(tr.entry)}` });
+        markers.push({ x: r.last, y: tr.stop, shape: 'label', position: 'right', color: C.sl, text: `SL ${fmt(tr.stop)}` });
+        markers.push({ x: r.last, y: tr.tp, shape: 'label', position: 'right', color: C.tp, text: `TP ${fmt(tr.tp)}` });
+      }
     }
     for (const e of r.events) {
       const tr = e.trade;
