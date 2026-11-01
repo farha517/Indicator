@@ -12,7 +12,7 @@ function frame(closes, spread = 0.5) {
   });
 }
 const breakAndRetest = () => frame([...linspace(80, 110, 70), ...linspace(109, 103, 8), 104, 106, 112, 114, 111, 108, 106, ...linspace(107, 130, 25)]);
-const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, entryMode: 'FVG edge', fvgWait: 0 }, over);
+const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, entryMode: 'FVG edge', fvgWait: 0, filterMode: 'Trend' }, over);
 
 let passed = 0;
 const test = (name, fn) => { fn(); passed++; console.log('ok -', name); };
@@ -20,7 +20,8 @@ const test = (name, fn) => { fn(); passed++; console.log('ok -', name); };
 test('defaults read from inputs', () => {
   const s = readSettings({});
   assert.strictEqual(s.temaFastLen, 8); assert.strictEqual(s.temaSlowLen, 55);
-  assert.strictEqual(s.rr, 1); assert.strictEqual(s.showFvg, true); assert.strictEqual(s.swingLen, 5);
+  assert.strictEqual(s.rr, 1); assert.strictEqual(s.showFvg, true); assert.strictEqual(s.swingLen, 3);
+  assert.strictEqual(s.filterMode, 'Off');
 });
 
 test('inputs object overrides defaults (by label)', () => {
@@ -138,6 +139,18 @@ test('TradingView-style drawing: zone box, dotted SL/TP, Buy Filled / TP Hit lab
   assert.ok(out.lines.some((l) => l.y1 === 109 && l.style === 'dotted' && l.color === '#4CAF50'));
   // Range High / Low: solid, across the chart
   assert.ok(out.lines.some((l) => l.style === 'solid' && l.x1 === 0));
+});
+
+test('a trending day produces visible setups with default settings', () => {
+  let seed = 11;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  const drift = [...Array(30).fill(2), ...Array(150).fill(-4), ...Array(60).fill(6), ...Array(60).fill(0)];
+  let x = 28750;
+  const bars = drift.map((d) => { const o = x; x += d + rand() * 30; return { o, h: Math.max(o, x) + Math.abs(rand()) * 12, l: Math.min(o, x) - Math.abs(rand()) * 12, c: x }; });
+  const out = compute(bars, {});
+  const zones = out.boxes.filter((b) => b.text === '');
+  assert.ok(zones.length >= 10, zones.length);
+  assert.ok(out.markers.filter((m) => /Filled/.test(m.text || '')).length >= 5);
 });
 
 console.log(`\n${passed} tests passed`);

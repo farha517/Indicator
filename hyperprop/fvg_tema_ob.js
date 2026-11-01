@@ -15,10 +15,11 @@ const showBg     = input.select('TEMA trend background', 'On', ['On', 'Off']);
 const showSwings = input.select('Range High / Low lines', 'On', ['On', 'Off']);
 const showPast   = input.select('Show past FVG trades', 'On', ['On', 'Off']);
 const showTags   = input.select('Price tags on live trade', 'Off', ['On', 'Off']);
+const showMissed = input.select('Show setups that never filled', 'On', ['On', 'Off']);
 const showObOld  = input.select('Show broken order blocks', 'Off', ['On', 'Off']);
 
 // ── Structure ────────────────────────────────────────────────────────────────
-const swingLen = input.int('Swing strength (candles each side)', 5, { min: 1, max: 50 });
+const swingLen = input.int('Swing strength (candles each side)', 3, { min: 1, max: 50 });
 
 // ── FVG trade ────────────────────────────────────────────────────────────────
 const entryMode  = input.select('Limit entry', 'FVG edge', ['FVG edge', 'FVG 50%']);
@@ -28,7 +29,7 @@ const tickSize   = input.float('Tick size (MNQ 0.25, MYM 1, MGC 0.1)', 0.25, { m
 const rr         = input.float('Take-profit (R)', 1, { min: 0.1, max: 20 });
 const expiry     = input.int('Cancel limit after N candles', 30, { min: 1, max: 500 });
 const fvgWait    = input.int('Candles after break to wait for the FVG', 2, { min: 0, max: 10 });
-const filterMode = input.select('TEMA filter for FVG trades', 'Trend', ['Trend', 'Recent cross', 'Off']);
+const filterMode = input.select('TEMA filter for FVG trades', 'Off', ['Off', 'Trend', 'Recent cross']);
 const crossLook  = input.int('Recent cross lookback (candles)', 20, { min: 1, max: 500 });
 
 // ── TEMA ─────────────────────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ function readSettings(inputs) {
     showSwings: on(v('Range High / Low lines', 'showSwings', showSwings)),
     showPast: on(v('Show past FVG trades', 'showPast', showPast)),
     showTags: on(v('Price tags on live trade', 'showTags', showTags)),
+    showMissed: on(v('Show setups that never filled', 'showMissed', showMissed)),
     showObOld: on(v('Show broken order blocks', 'showObOld', showObOld)),
     swingLen: Number(v('Swing strength (candles each side)', 'swingLen', swingLen)),
     entryMode: v('Limit entry', 'entryMode', entryMode),
@@ -369,7 +371,11 @@ function render(r, s) {
     const dec = (String(s.tickSize).split('.')[1] || '').length; // MNQ 0.25 -> 2, MYM 1 -> 0, MGC 0.1 -> 1
     const fmt = (p) => (Math.round(p / s.tickSize) * s.tickSize).toFixed(dec);
     for (const tr of r.trades) {
-      if (tr.status === 'cancelled') continue;
+      if (tr.status === 'cancelled') {
+        // Setup that price never came back to: zone only, faded, until it was cancelled
+        if (s.showMissed && s.showPast) boxes.push(box(tr.fvgBar, tr.top, tr.exit, tr.bot, tr.side === 'long' ? C.buy : C.sell, 0.06, ''));
+        continue;
+      }
       const live = tr.status === 'pending' || tr.status === 'open';
       if (!live && !s.showPast) continue;
       const isL = tr.side === 'long';
