@@ -12,7 +12,7 @@ function frame(closes, spread = 0.5) {
   });
 }
 const breakAndRetest = () => frame([...linspace(80, 110, 70), ...linspace(109, 103, 8), 104, 106, 112, 114, 111, 108, 106, ...linspace(107, 130, 25)]);
-const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0 }, over);
+const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, entryMode: 'FVG edge', fvgWait: 0 }, over);
 
 let passed = 0;
 const test = (name, fn) => { fn(); passed++; console.log('ok -', name); };
@@ -81,14 +81,14 @@ test('no look-ahead: signals on the first 400 candles match a run on all 600', (
 test('only the live FVG setup is drawn by default, with price tags', () => {
   // cut the data right after the setup so it is still pending
   const bars = breakAndRetest().slice(0, 82);
-  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3 });
+  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Limit entry': 'FVG edge', 'Candles after break to wait for the FVG': 0 });
   assert.ok(out.markers.some((m) => m.text === 'BUY LIMIT 105.50'), JSON.stringify(out.markers.map((m) => m.text)));
   assert.ok(out.markers.some((m) => m.text === 'SL 102.00'));
   assert.ok(out.markers.some((m) => m.text === 'TP 109.00'));
   // finished trades are hidden unless "Show past FVG trades" is On
-  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3 });
+  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' });
   assert.ok(!done.boxes.some((b) => b.text === '' && b.y1 === 105.5));
-  const past = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On' });
+  const past = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On', 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' });
   assert.ok(past.boxes.some((b) => b.y1 === 105.5));
 });
 
@@ -99,6 +99,35 @@ test('broken order blocks are hidden by default', () => {
   const out = compute(bars, { 'Max active OBs per side': 1 });
   const obBoxes = out.boxes.filter((b) => /OB$/.test(b.text));
   assert.ok(obBoxes.length <= 2, obBoxes.length);
+});
+
+test('default entry is the middle of the FVG', () => {
+  const r = analyse(breakAndRetest(), Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, filterMode: 'Off', fvgWait: 0 }));
+  assert.strictEqual(r.trades[0].entry, (105.5 + 104.5) / 2);
+});
+
+test("breakout candle's own gap (completes next candle) replaces the earlier one", () => {
+  const r = analyse(breakAndRetest(), base({ filterMode: 'Off', fvgWait: 2 }));
+  const live = r.trades.filter((x) => x.status !== 'cancelled');
+  assert.strictEqual(live[0].setup, 81); assert.strictEqual(live[0].fvgBar, 79);
+  assert.strictEqual(live[0].top, 111.5); assert.strictEqual(live[0].bot, 106.5);
+});
+
+test('FVG completed one candle after the break still becomes a setup', () => {
+  // break candle closes above the swing high, but its gap only completes on the next candle
+  const bars = frame([...linspace(80, 110, 70), ...linspace(109, 103, 8), 104, 111, 116, 117, 115, 113, 112.5, ...linspace(113, 130, 20)]);
+  // candle 79 closes above the swing high; its gap completes on candle 80
+  const tr = analyse(bars, base({ filterMode: 'Off', fvgWait: 2 })).trades.find((x) => x.side === 'long');
+  assert.ok(tr, 'no long setup');
+  assert.strictEqual(tr.setup, 80); assert.strictEqual(tr.fvgBar, 78);
+  // without waiting, that gap is missed
+  assert.ok(!analyse(bars, base({ filterMode: 'Off', fvgWait: 0 })).trades.some((x) => x.side === 'long' && x.setup === 80));
+});
+
+test('no BUY/SELL text on markers', () => {
+  const out = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On' });
+  assert.ok(!out.markers.some((m) => m.text === 'BUY' || m.text === 'SELL'));
+  assert.ok(out.markers.some((m) => m.shape === 'arrowUp'));
 });
 
 console.log(`\n${passed} tests passed`);

@@ -20,12 +20,13 @@ const showObOld  = input.select('Show broken order blocks', 'Off', ['On', 'Off']
 const swingLen = input.int('Swing strength (candles each side)', 5, { min: 1, max: 50 });
 
 // ── FVG trade ────────────────────────────────────────────────────────────────
-const entryMode  = input.select('Limit entry', 'FVG edge', ['FVG edge', 'FVG 50%']);
+const entryMode  = input.select('Limit entry', 'FVG 50%', ['FVG 50%', 'FVG edge']);
 const slMode     = input.select('Stop-loss at', 'Swing', ['Swing', 'FVG']);
 const slTicks    = input.int('Stop buffer (ticks)', 2, { min: 0, max: 200 });
 const tickSize   = input.float('Tick size (MNQ 0.25, MYM 1, MGC 0.1)', 0.25, { min: 0.0001, max: 100 });
 const rr         = input.float('Take-profit (R)', 1, { min: 0.1, max: 20 });
 const expiry     = input.int('Cancel limit after N candles', 30, { min: 1, max: 500 });
+const fvgWait    = input.int('Candles after break to wait for the FVG', 2, { min: 0, max: 10 });
 const filterMode = input.select('TEMA filter for FVG trades', 'Trend', ['Trend', 'Recent cross', 'Off']);
 const crossLook  = input.int('Recent cross lookback (candles)', 20, { min: 1, max: 500 });
 
@@ -34,7 +35,7 @@ const temaFastLen = input.int('TEMA fast', 8, { min: 1, max: 500 });
 const temaSlowLen = input.int('TEMA slow', 55, { min: 2, max: 500 });
 
 // ── Order blocks ─────────────────────────────────────────────────────────────
-const obMax    = input.int('Max active OBs per side', 1, { min: 1, max: 20 });
+const obMax    = input.int('Max active OBs per side', 3, { min: 1, max: 20 });
 const obSearch = input.int('Candles to search for OB candle', 10, { min: 1, max: 50 });
 
 // ── Colours ──────────────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ function readSettings(inputs) {
     tickSize: Number(v('Tick size (MNQ 0.25, MYM 1, MGC 0.1)', 'tickSize', tickSize)),
     rr: Number(v('Take-profit (R)', 'rr', rr)),
     expiry: Number(v('Cancel limit after N candles', 'expiry', expiry)),
+    fvgWait: Number(v('Candles after break to wait for the FVG', 'fvgWait', fvgWait)),
     filterMode: v('TEMA filter for FVG trades', 'filterMode', filterMode),
     crossLook: Number(v('Recent cross lookback (candles)', 'crossLook', crossLook)),
     temaFastLen: Number(v('TEMA fast', 'temaFastLen', temaFastLen)),
@@ -161,6 +163,27 @@ function analyse(bars, s) {
   let pend = { long: null, short: null };
   let open = { long: null, short: null };
   let swingHi = null, swingLo = null; // {bar, price, used}
+  // After a break, keep watching a few candles for the breakout FVG to complete
+  const armed = { long: null, short: null }; // {leg, until}
+
+  const makeSetup = (side, t, k, leg) => {
+    const isL = side === 'long';
+    if (open[side] || !filterOk(side, t)) return false;
+    const top = isL ? l[k] : l[k - 2];
+    const bot = isL ? h[k - 2] : h[k];
+    const entry = s.entryMode === 'FVG edge' ? (isL ? top : bot) : (top + bot) / 2;
+    const stop = isL ? (s.slMode === 'Swing' ? l[leg] : bot) - s.slTicks * s.tickSize
+                     : (s.slMode === 'Swing' ? h[leg] : top) + s.slTicks * s.tickSize;
+    if (isL ? entry <= stop : stop <= entry) return false;
+    if (pend[side]) { pend[side].status = 'cancelled'; pend[side].exit = t; }
+    const tp = isL ? entry + s.rr * (entry - stop) : entry - s.rr * (stop - entry);
+    const tr = { side, setup: t, fvgBar: k - 2, top, bot, entry, stop, tp, fill: null, exit: null, status: 'pending' };
+    trades.push(tr);
+    pend[side] = tr;
+    events.push({ bar: t, type: isL ? 'longSetup' : 'shortSetup', trade: tr });
+    return true;
+  };
+  const isGap = (side, i) => i >= 2 && (side === 'long' ? l[i] > h[i - 2] : h[i] < l[i - 2]);
   let wins = 0, losses = 0, streak = 0;
 
   const filterOk = (side, t) => {
@@ -231,7 +254,18 @@ function analyse(bars, s) {
       if (isPivotLow(l, p, s.swingLen)) swingLo = { bar: p, price: l[p], used: false };
     }
 
-    // 5) Bullish break of the most recent swing high
+    // 5) Armed breaks: the breakout FVG completes on a candle after the break
+    for (const side of ['long', 'short']) {
+      const a = armed[side];
+      if (!a || a.since === t) continue;
+      if (t > a.until) { armed[side] = null; continue; }
+      if (isGap(side, t) && t - 2 >= a.leg) {
+        makeSetup(side, t, t, a.leg);
+        armed[side] = null;
+      }
+    }
+
+    // 6) Bullish break of the most recent swing high
     if (swingHi && !swingHi.used && c[t] > swingHi.price) {
       swingHi.used = true;
       let leg = swingHi.bar;
@@ -240,22 +274,13 @@ function analyse(bars, s) {
         if (c[j] < o[j]) { addOb(obs, true, j, t, h[j], l[j], s.obMax); events.push({ bar: t, type: 'bullOb' }); break; }
       }
       let k = -1;
-      for (let i = t; i >= Math.max(leg, 2); i--) if (l[i] > h[i - 2]) { k = i; break; }
-      if (k >= 0 && !open.long && filterOk('long', t)) {
-        const top = l[k], bot = h[k - 2];
-        const entry = s.entryMode === 'FVG edge' ? top : (top + bot) / 2;
-        const stop = (s.slMode === 'Swing' ? l[leg] : bot) - s.slTicks * s.tickSize;
-        if (entry > stop) {
-          if (pend.long) { pend.long.status = 'cancelled'; pend.long.exit = t; }
-          const tr = { side: 'long', setup: t, fvgBar: k - 2, top, bot, entry, stop, tp: entry + s.rr * (entry - stop), fill: null, exit: null, status: 'pending' };
-          trades.push(tr);
-          pend.long = tr;
-          events.push({ bar: t, type: 'longSetup', trade: tr });
-        }
-      }
+      for (let i = t; i >= Math.max(leg + 2, 2); i--) if (isGap('long', i)) { k = i; break; }
+      if (k >= 0) makeSetup('long', t, k, leg);
+      if (s.fvgWait > 0) armed.long = { leg, since: t, until: t + s.fvgWait }; // a fresher gap may still form
+      armed.short = null;
     }
 
-    // 6) Bearish break of the most recent swing low
+    // 7) Bearish break of the most recent swing low
     if (swingLo && !swingLo.used && c[t] < swingLo.price) {
       swingLo.used = true;
       let leg = swingLo.bar;
@@ -264,19 +289,10 @@ function analyse(bars, s) {
         if (c[j] > o[j]) { addOb(obs, false, j, t, h[j], l[j], s.obMax); events.push({ bar: t, type: 'bearOb' }); break; }
       }
       let k = -1;
-      for (let i = t; i >= Math.max(leg, 2); i--) if (h[i] < l[i - 2]) { k = i; break; }
-      if (k >= 0 && !open.short && filterOk('short', t)) {
-        const top = l[k - 2], bot = h[k];
-        const entry = s.entryMode === 'FVG edge' ? bot : (top + bot) / 2;
-        const stop = (s.slMode === 'Swing' ? h[leg] : top) + s.slTicks * s.tickSize;
-        if (stop > entry) {
-          if (pend.short) { pend.short.status = 'cancelled'; pend.short.exit = t; }
-          const tr = { side: 'short', setup: t, fvgBar: k - 2, top, bot, entry, stop, tp: entry - s.rr * (stop - entry), fill: null, exit: null, status: 'pending' };
-          trades.push(tr);
-          pend.short = tr;
-          events.push({ bar: t, type: 'shortSetup', trade: tr });
-        }
-      }
+      for (let i = t; i >= Math.max(leg + 2, 2); i--) if (isGap('short', i)) { k = i; break; }
+      if (k >= 0) makeSetup('short', t, k, leg);
+      if (s.fvgWait > 0) armed.short = { leg, since: t, until: t + s.fvgWait };
+      armed.long = null;
     }
   }
 
@@ -362,17 +378,18 @@ function render(r, s) {
       lines.push(line(tr.fvgBar, tr.tp, x2, tr.tp, C.tp, 'dotted', 2));
       if (live) {
         // Price tags at the right edge so the levels are readable
-        const above = tr.side === 'long' ? 'below' : 'above';
         const tag = tr.status === 'pending' ? (tr.side === 'long' ? 'BUY LIMIT' : 'SELL LIMIT') : (tr.side === 'long' ? 'LONG' : 'SHORT');
-        markers.push({ x: r.last, y: tr.entry, shape: 'label', position: 'right', color: C.entry, text: `${tag} ${fmt(tr.entry)}` });
-        markers.push({ x: r.last, y: tr.stop, shape: 'label', position: 'right', color: C.sl, text: `SL ${fmt(tr.stop)}` });
-        markers.push({ x: r.last, y: tr.tp, shape: 'label', position: 'right', color: C.tp, text: `TP ${fmt(tr.tp)}` });
+        const isL = tr.side === 'long';
+        markers.push({ x: r.last, y: tr.entry, shape: 'label', position: isL ? 'above' : 'below', color: C.entry, text: `${tag} ${fmt(tr.entry)}` });
+        markers.push({ x: r.last, y: tr.stop, shape: 'label', position: isL ? 'below' : 'above', color: C.sl, text: `SL ${fmt(tr.stop)}` });
+        markers.push({ x: r.last, y: tr.tp, shape: 'label', position: isL ? 'above' : 'below', color: C.tp, text: `TP ${fmt(tr.tp)}` });
       }
     }
     for (const e of r.events) {
       const tr = e.trade;
-      if (e.type === 'buy') markers.push({ x: e.bar, y: tr.entry, shape: 'arrowUp', position: 'below', color: C.buy, text: 'BUY' });
-      if (e.type === 'sell') markers.push({ x: e.bar, y: tr.entry, shape: 'arrowDown', position: 'above', color: C.sell, text: 'SELL' });
+      const drawn = s.showPast || (tr && (tr.status === 'pending' || tr.status === 'open'));
+      if (e.type === 'buy' && drawn) markers.push({ x: e.bar, y: tr.entry, shape: 'arrowUp', position: 'below', color: C.buy });
+      if (e.type === 'sell' && drawn) markers.push({ x: e.bar, y: tr.entry, shape: 'arrowDown', position: 'above', color: C.sell });
       if (e.type === 'takeProfit') markers.push({ x: e.bar, y: tr.tp, shape: 'label', position: tr.side === 'long' ? 'above' : 'below', color: C.tp, text: `WIN 🔥${tr.streak}` });
       if (e.type === 'stopLoss') markers.push({ x: e.bar, y: tr.stop, shape: 'label', position: tr.side === 'long' ? 'below' : 'above', color: C.sl, text: 'SL' });
     }
