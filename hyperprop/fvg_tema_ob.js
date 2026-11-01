@@ -12,15 +12,16 @@ const showFvg    = input.select('FVG strategy', 'On', ['On', 'Off']);
 const showOb     = input.select('Order blocks', 'On', ['On', 'Off']);
 const showTema   = input.select('TEMA lines', 'On', ['On', 'Off']);
 const showBg     = input.select('TEMA trend background', 'On', ['On', 'Off']);
-const showSwings = input.select('Swing high / low lines', 'On', ['On', 'Off']);
-const showPast   = input.select('Show past FVG trades', 'Off', ['On', 'Off']);
+const showSwings = input.select('Range High / Low lines', 'On', ['On', 'Off']);
+const showPast   = input.select('Show past FVG trades', 'On', ['On', 'Off']);
+const showTags   = input.select('Price tags on live trade', 'Off', ['On', 'Off']);
 const showObOld  = input.select('Show broken order blocks', 'Off', ['On', 'Off']);
 
 // ── Structure ────────────────────────────────────────────────────────────────
 const swingLen = input.int('Swing strength (candles each side)', 5, { min: 1, max: 50 });
 
 // ── FVG trade ────────────────────────────────────────────────────────────────
-const entryMode  = input.select('Limit entry', 'FVG 50%', ['FVG 50%', 'FVG edge']);
+const entryMode  = input.select('Limit entry', 'FVG edge', ['FVG edge', 'FVG 50%']);
 const slMode     = input.select('Stop-loss at', 'Swing', ['Swing', 'FVG']);
 const slTicks    = input.int('Stop buffer (ticks)', 2, { min: 0, max: 200 });
 const tickSize   = input.float('Tick size (MNQ 0.25, MYM 1, MGC 0.1)', 0.25, { min: 0.0001, max: 100 });
@@ -39,10 +40,10 @@ const obMax    = input.int('Max active OBs per side', 3, { min: 1, max: 20 });
 const obSearch = input.int('Candles to search for OB candle', 10, { min: 1, max: 50 });
 
 // ── Colours ──────────────────────────────────────────────────────────────────
-const colBuy      = input.color('BUY arrow / bullish FVG', '#26A69A');
-const colSell     = input.color('SELL arrow / bearish FVG', '#EF5350');
+const colBuy      = input.color('Bullish setup zone', '#4CAF50');
+const colSell     = input.color('Bearish setup zone', '#F23645');
 const colEntry    = input.color('Entry line', '#FFEB3B');
-const colSl       = input.color('Stop-loss line', '#EF5350');
+const colSl       = input.color('Stop-loss line', '#F23645');
 const colTp       = input.color('Take-profit line', '#4CAF50');
 const colTemaFast = input.color('TEMA fast', '#FFFFFF');
 const colTemaSlow = input.color('TEMA slow', '#7E57C2');
@@ -50,8 +51,8 @@ const colBgBull   = input.color('Background bullish', '#26A69A');
 const colBgBear   = input.color('Background bearish', '#EF5350');
 const colObBull   = input.color('Bullish order block', '#26A69A');
 const colObBear   = input.color('Bearish order block', '#EF5350');
-const colSwingHi  = input.color('Swing high line', '#4CAF50');
-const colSwingLo  = input.color('Swing low line', '#EF5350');
+const colSwingHi  = input.color('Range High line', '#4CAF50');
+const colSwingLo  = input.color('Range Low line', '#F23645');
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Settings: read each value from `inputs` by label, falling back to the const above.
@@ -71,8 +72,9 @@ function readSettings(inputs) {
     showOb: on(v('Order blocks', 'showOb', showOb)),
     showTema: on(v('TEMA lines', 'showTema', showTema)),
     showBg: on(v('TEMA trend background', 'showBg', showBg)),
-    showSwings: on(v('Swing high / low lines', 'showSwings', showSwings)),
+    showSwings: on(v('Range High / Low lines', 'showSwings', showSwings)),
     showPast: on(v('Show past FVG trades', 'showPast', showPast)),
+    showTags: on(v('Price tags on live trade', 'showTags', showTags)),
     showObOld: on(v('Show broken order blocks', 'showObOld', showObOld)),
     swingLen: Number(v('Swing strength (candles each side)', 'swingLen', swingLen)),
     entryMode: v('Limit entry', 'entryMode', entryMode),
@@ -89,8 +91,8 @@ function readSettings(inputs) {
     obMax: Number(v('Max active OBs per side', 'obMax', obMax)),
     obSearch: Number(v('Candles to search for OB candle', 'obSearch', obSearch)),
     col: {
-      buy: v('BUY arrow / bullish FVG', 'colBuy', colBuy),
-      sell: v('SELL arrow / bearish FVG', 'colSell', colSell),
+      buy: v('Bullish setup zone', 'colBuy', colBuy),
+      sell: v('Bearish setup zone', 'colSell', colSell),
       entry: v('Entry line', 'colEntry', colEntry),
       sl: v('Stop-loss line', 'colSl', colSl),
       tp: v('Take-profit line', 'colTp', colTp),
@@ -100,8 +102,8 @@ function readSettings(inputs) {
       bgBear: v('Background bearish', 'colBgBear', colBgBear),
       obBull: v('Bullish order block', 'colObBull', colObBull),
       obBear: v('Bearish order block', 'colObBear', colObBear),
-      swingHi: v('Swing high line', 'colSwingHi', colSwingHi),
-      swingLo: v('Swing low line', 'colSwingLo', colSwingLo),
+      swingHi: v('Range High line', 'colSwingHi', colSwingHi),
+      swingLo: v('Range Low line', 'colSwingLo', colSwingLo),
     },
   };
 }
@@ -349,8 +351,9 @@ function render(r, s) {
   }
 
   if (s.showSwings) {
-    if (r.swingHi) lines.push(line(r.swingHi.bar, r.swingHi.price, r.last, r.swingHi.price, C.swingHi, 'dashed', 1, 'Swing High'));
-    if (r.swingLo) lines.push(line(r.swingLo.bar, r.swingLo.price, r.last, r.swingLo.price, C.swingLo, 'dashed', 1, 'Swing Low'));
+    // Solid lines across the whole chart, like the TradingView Range High / Range Low
+    if (r.swingHi) lines.push(line(0, r.swingHi.price, r.last, r.swingHi.price, C.swingHi, 'solid', 2));
+    if (r.swingLo) lines.push(line(0, r.swingLo.price, r.last, r.swingLo.price, C.swingLo, 'solid', 2));
   }
 
   if (s.showOb) {
@@ -366,20 +369,21 @@ function render(r, s) {
     const dec = (String(s.tickSize).split('.')[1] || '').length; // MNQ 0.25 -> 2, MYM 1 -> 0, MGC 0.1 -> 1
     const fmt = (p) => (Math.round(p / s.tickSize) * s.tickSize).toFixed(dec);
     for (const tr of r.trades) {
+      if (tr.status === 'cancelled') continue;
       const live = tr.status === 'pending' || tr.status === 'open';
       if (!live && !s.showPast) continue;
-      if (tr.status === 'cancelled') continue;
-      const col = tr.side === 'long' ? C.buy : C.sell;
+      const isL = tr.side === 'long';
+      const col = isL ? C.buy : C.sell;
       const x2 = live ? r.last : tr.exit;
-      // Setup zone (the FVG) + entry / stop / target
-      boxes.push(box(tr.fvgBar, tr.top, x2, tr.bot, col, 0.3, ''));
-      lines.push(line(tr.fvgBar, tr.entry, x2, tr.entry, C.entry, 'solid', 2));
+      // Setup zone: solid outline, dark tinted fill
+      boxes.push(box(tr.fvgBar, tr.top, x2, tr.bot, col, 0.15, ''));
+      // Stop-loss (red dotted) and take-profit (green dotted) across the zone
       lines.push(line(tr.fvgBar, tr.stop, x2, tr.stop, C.sl, 'dotted', 2));
       lines.push(line(tr.fvgBar, tr.tp, x2, tr.tp, C.tp, 'dotted', 2));
-      if (live) {
-        // Price tags at the right edge so the levels are readable
-        const tag = tr.status === 'pending' ? (tr.side === 'long' ? 'BUY LIMIT' : 'SELL LIMIT') : (tr.side === 'long' ? 'LONG' : 'SHORT');
-        const isL = tr.side === 'long';
+      // Entry price (yellow dotted) while the trade is live
+      if (live) lines.push(line(tr.fvgBar, tr.entry, x2, tr.entry, C.entry, 'dotted', 2));
+      if (live && s.showTags) {
+        const tag = tr.status === 'pending' ? 'Entry' : isL ? 'Long' : 'Short';
         markers.push({ x: r.last, y: tr.entry, shape: 'label', position: isL ? 'above' : 'below', color: C.entry, text: `${tag} ${fmt(tr.entry)}` });
         markers.push({ x: r.last, y: tr.stop, shape: 'label', position: isL ? 'below' : 'above', color: C.sl, text: `SL ${fmt(tr.stop)}` });
         markers.push({ x: r.last, y: tr.tp, shape: 'label', position: isL ? 'above' : 'below', color: C.tp, text: `TP ${fmt(tr.tp)}` });
@@ -387,11 +391,14 @@ function render(r, s) {
     }
     for (const e of r.events) {
       const tr = e.trade;
-      const drawn = s.showPast || (tr && (tr.status === 'pending' || tr.status === 'open'));
-      if (e.type === 'buy' && drawn) markers.push({ x: e.bar, y: tr.entry, shape: 'arrowUp', position: 'below', color: C.buy });
-      if (e.type === 'sell' && drawn) markers.push({ x: e.bar, y: tr.entry, shape: 'arrowDown', position: 'above', color: C.sell });
-      if (e.type === 'takeProfit') markers.push({ x: e.bar, y: tr.tp, shape: 'label', position: tr.side === 'long' ? 'above' : 'below', color: C.tp, text: `WIN 🔥${tr.streak}` });
-      if (e.type === 'stopLoss') markers.push({ x: e.bar, y: tr.stop, shape: 'label', position: tr.side === 'long' ? 'below' : 'above', color: C.sl, text: 'SL' });
+      if (!tr || tr.status === 'cancelled') continue;
+      const live = tr.status === 'pending' || tr.status === 'open';
+      if (!live && !s.showPast) continue;
+      const isL = tr.side === 'long';
+      if (e.type === 'buy') markers.push({ x: e.bar, y: tr.entry, shape: 'label', position: 'below', color: C.buy, text: 'Buy Filled' });
+      if (e.type === 'sell') markers.push({ x: e.bar, y: tr.entry, shape: 'label', position: 'above', color: C.sell, text: 'Sell Filled' });
+      if (e.type === 'takeProfit') markers.push({ x: e.bar, y: tr.tp, shape: 'label', position: isL ? 'above' : 'below', color: C.tp, text: 'TP Hit' });
+      if (e.type === 'stopLoss') markers.push({ x: e.bar, y: tr.stop, shape: 'label', position: isL ? 'below' : 'above', color: C.sl, text: 'SL Hit' });
     }
   }
 

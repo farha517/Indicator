@@ -60,7 +60,7 @@ test('toggles: FVG off still draws OBs and TEMA; everything off draws nothing', 
   assert.ok(a.boxes.some((b) => b.text === 'Bull OB'));
   assert.strictEqual(a.plots.length, 2);
   assert.ok(!a.markers.some((m) => m.text === 'BUY' || m.text === 'SELL'));
-  const off = compute(bars, { 'FVG strategy': 'Off', 'Order blocks': 'Off', 'TEMA lines': 'Off', 'TEMA trend background': 'Off', 'Swing high / low lines': 'Off' });
+  const off = compute(bars, { 'FVG strategy': 'Off', 'Order blocks': 'Off', 'TEMA lines': 'Off', 'TEMA trend background': 'Off', 'Range High / Low lines': 'Off' });
   for (const k of ['plots', 'boxes', 'lines', 'markers', 'bgBands']) assert.strictEqual(off[k].length, 0, k);
 });
 
@@ -78,15 +78,15 @@ test('no look-ahead: signals on the first 400 candles match a run on all 600', (
   assert.strictEqual(key(analyse(bars, base({})), 400), key(analyse(bars.slice(0, 400), base({})), 400));
 });
 
-test('only the live FVG setup is drawn by default, with price tags', () => {
+test('live setup can show price tags; past trades can be hidden', () => {
   // cut the data right after the setup so it is still pending
   const bars = breakAndRetest().slice(0, 82);
-  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Limit entry': 'FVG edge', 'Candles after break to wait for the FVG': 0 });
-  assert.ok(out.markers.some((m) => m.text === 'BUY LIMIT 105.50'), JSON.stringify(out.markers.map((m) => m.text)));
+  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Limit entry': 'FVG edge', 'Candles after break to wait for the FVG': 0, 'Price tags on live trade': 'On' });
+  assert.ok(out.markers.some((m) => m.text === 'Entry 105.50'), JSON.stringify(out.markers.map((m) => m.text)));
   assert.ok(out.markers.some((m) => m.text === 'SL 102.00'));
   assert.ok(out.markers.some((m) => m.text === 'TP 109.00'));
   // finished trades are hidden unless "Show past FVG trades" is On
-  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' });
+  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge', 'Show past FVG trades': 'Off' });
   assert.ok(!done.boxes.some((b) => b.text === '' && b.y1 === 105.5));
   const past = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On', 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' });
   assert.ok(past.boxes.some((b) => b.y1 === 105.5));
@@ -101,9 +101,11 @@ test('broken order blocks are hidden by default', () => {
   assert.ok(obBoxes.length <= 2, obBoxes.length);
 });
 
-test('default entry is the middle of the FVG', () => {
+test('entry: near edge by default (matches TradingView), 50% optional', () => {
   const r = analyse(breakAndRetest(), Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, filterMode: 'Off', fvgWait: 0 }));
-  assert.strictEqual(r.trades[0].entry, (105.5 + 104.5) / 2);
+  assert.strictEqual(r.trades[0].entry, 105.5);
+  const m = analyse(breakAndRetest(), Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, filterMode: 'Off', fvgWait: 0, entryMode: 'FVG 50%' }));
+  assert.strictEqual(m.trades[0].entry, 105);
 });
 
 test("breakout candle's own gap (completes next candle) replaces the earlier one", () => {
@@ -124,10 +126,18 @@ test('FVG completed one candle after the break still becomes a setup', () => {
   assert.ok(!analyse(bars, base({ filterMode: 'Off', fvgWait: 0 })).trades.some((x) => x.side === 'long' && x.setup === 80));
 });
 
-test('no BUY/SELL text on markers', () => {
-  const out = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On' });
-  assert.ok(!out.markers.some((m) => m.text === 'BUY' || m.text === 'SELL'));
-  assert.ok(out.markers.some((m) => m.shape === 'arrowUp'));
+test('TradingView-style drawing: zone box, dotted SL/TP, Buy Filled / TP Hit labels, no arrows or emojis', () => {
+  const out = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0 });
+  const texts = out.markers.map((m) => m.text).filter(Boolean);
+  assert.ok(texts.includes('Buy Filled'), texts); assert.ok(texts.includes('TP Hit'), texts);
+  assert.ok(!out.markers.some((m) => /arrow/.test(m.shape)));
+  assert.ok(!texts.some((t) => /[\u{1F300}-\u{1FAFF}]/u.test(t)));
+  const zone = out.boxes.find((b) => b.y1 === 105.5 && b.y2 === 104.5);
+  assert.ok(zone && zone.borderColor === '#4CAF50');
+  assert.ok(out.lines.some((l) => l.y1 === 102 && l.style === 'dotted' && l.color === '#F23645'));
+  assert.ok(out.lines.some((l) => l.y1 === 109 && l.style === 'dotted' && l.color === '#4CAF50'));
+  // Range High / Low: solid, across the chart
+  assert.ok(out.lines.some((l) => l.style === 'solid' && l.x1 === 0));
 });
 
 console.log(`\n${passed} tests passed`);

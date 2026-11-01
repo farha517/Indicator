@@ -7,11 +7,11 @@ A custom indicator for **Hyperprop** (app.hyperprop.com) charts, built for MNQ, 
 ## Features (each one can be switched On/Off)
 | Feature | What it shows |
 |---|---|
-| **FVG strategy** | When a candle closes through the **most recent swing high/low**, it boxes the Fair Value Gap left by that breakout move (it waits up to 2 more candles for the breakout candle's own gap to complete). The limit entry is the middle (50%) of the gap and the stop goes past the swing. It draws a yellow entry line, a red dotted stop-loss and a green dotted 1R take-profit, with price tags (`BUY LIMIT 28517.25`, `SL …`, `TP …`) at the right edge. A small arrow marks the fill, and a WIN 🔥 or SL label when the trade ends. Only the live setup is drawn unless **Show past FVG trades** is On. |
+| **FVG strategy** | Drawn like the TradingView *Breakaway* indicator. When a candle closes through the most recent swing high/low, the FVG from the breakout candle becomes the **setup zone**: a box with a solid outline (green long, red short) and a dark fill. It has a **red dotted stop-loss** past the swing and a **green dotted 1R take-profit**. A **yellow dotted entry line** shows while the trade is live. The limit entry is the near edge of the zone (switch to 50% in settings). Labels read **Buy Filled / Sell Filled**, **TP Hit** and **SL Hit**. Past trades stay on the chart (toggle **Show past FVG trades**). |
 | **Order blocks** | The last opposite-colour candle before each break of a swing (a bullish OB is the last red candle before the push up). Up to 3 unbroken OBs per side are shown by default. Raise **Max active OBs per side** for more, or turn on **Show broken order blocks**. |
 | **TEMA lines** | TEMA 8 and TEMA 55, with dots where they cross |
 | **TEMA trend background** | Green when TEMA 8 > TEMA 55, red when it's below |
-| **Swing high / low lines** | The most recent swing high and swing low |
+| **Range High / Low lines** | Solid green / red lines across the chart at the most recent swing high and swing low |
 
 The **TEMA filter for FVG trades** (Trend / Recent cross / Off) controls whether FVG setups must agree with the TEMA trend. Every colour can be changed in the settings.
 
