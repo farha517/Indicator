@@ -12,8 +12,11 @@ function frame(closes, spread = 0.5) {
   });
 }
 const breakAndRetest = () => frame([...linspace(80, 110, 70), ...linspace(109, 103, 8), 104, 106, 112, 114, 111, 108, 106, ...linspace(107, 130, 25)]);
-const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, entryMode: 'FVG edge', fvgWait: 0, filterMode: 'Trend' }, over);
+const base = (over) => Object.assign(readSettings({}), { swingLen: 3, slTicks: 0, entryMode: 'FVG edge', fvgWait: 0, filterMode: 'Trend', minFvgAtr: 0, oneAtATime: false }, over);
 
+// The quality filters off, for tests that check drawing rather than filtering
+const LOOSE = { 'Min FVG size (x ATR, 0 = off)': 0, 'One setup at a time': 'Off' };
+const loose = (o) => Object.assign({}, LOOSE, o);
 let passed = 0;
 const test = (name, fn) => { fn(); passed++; console.log('ok -', name); };
 
@@ -21,7 +24,7 @@ test('defaults read from inputs', () => {
   const s = readSettings({});
   assert.strictEqual(s.temaFastLen, 8); assert.strictEqual(s.temaSlowLen, 55);
   assert.strictEqual(s.rr, 1); assert.strictEqual(s.showFvg, true); assert.strictEqual(s.swingLen, 3);
-  assert.strictEqual(s.filterMode, 'Off');
+  assert.strictEqual(s.filterMode, 'Trend');
 });
 
 test('inputs object overrides defaults (by label)', () => {
@@ -82,14 +85,14 @@ test('no look-ahead: signals on the first 400 candles match a run on all 600', (
 test('live setup can show price tags; past trades can be hidden', () => {
   // cut the data right after the setup so it is still pending
   const bars = breakAndRetest().slice(0, 82);
-  const out = compute(bars, { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Limit entry': 'FVG edge', 'Candles after break to wait for the FVG': 0, 'Price tags on live trade': 'On' });
+  const out = compute(bars, loose({ 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Limit entry': 'FVG edge', 'Candles after break to wait for the FVG': 0, 'Price tags on live trade': 'On' }));
   assert.ok(out.markers.some((m) => m.text === 'Entry 105.50'), JSON.stringify(out.markers.map((m) => m.text)));
   assert.ok(out.markers.some((m) => m.text === 'SL 102.00'));
   assert.ok(out.markers.some((m) => m.text === 'TP 109.00'));
   // finished trades are hidden unless "Show past FVG trades" is On
-  const done = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge', 'Show past FVG trades': 'Off' });
+  const done = compute(breakAndRetest(), loose({ 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge', 'Show past FVG trades': 'Off' }));
   assert.ok(!done.boxes.some((b) => b.text === '' && b.y1 === 105.5));
-  const past = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On', 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' });
+  const past = compute(breakAndRetest(), loose({ 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Show past FVG trades': 'On', 'Candles after break to wait for the FVG': 0, 'Limit entry': 'FVG edge' }));
   assert.ok(past.boxes.some((b) => b.y1 === 105.5));
 });
 
@@ -128,7 +131,7 @@ test('FVG completed one candle after the break still becomes a setup', () => {
 });
 
 test('TradingView-style drawing: zone box, dotted SL/TP, Buy Filled / TP Hit labels, no arrows or emojis', () => {
-  const out = compute(breakAndRetest(), { 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0 });
+  const out = compute(breakAndRetest(), loose({ 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0 }));
   const texts = out.markers.map((m) => m.text).filter(Boolean);
   assert.ok(texts.includes('Buy Filled'), texts); assert.ok(texts.includes('TP Hit'), texts);
   assert.ok(!out.markers.some((m) => /arrow/.test(m.shape)));
@@ -147,10 +150,33 @@ test('a trending day produces visible setups with default settings', () => {
   const drift = [...Array(30).fill(2), ...Array(150).fill(-4), ...Array(60).fill(6), ...Array(60).fill(0)];
   let x = 28750;
   const bars = drift.map((d) => { const o = x; x += d + rand() * 30; return { o, h: Math.max(o, x) + Math.abs(rand()) * 12, l: Math.min(o, x) - Math.abs(rand()) * 12, c: x }; });
-  const out = compute(bars, {});
+  const out = compute(bars, loose({ 'TEMA filter for FVG trades': 'Off', 'Show setups that never filled': 'On' }));
   const zones = out.boxes.filter((b) => b.text === '');
   assert.ok(zones.length >= 10, zones.length);
+  // default quality filters keep fewer setups than the loose settings
+  const strict = compute(bars, {}).boxes.filter((b) => b.text === '').length;
+  assert.ok(strict < zones.length, `${strict} vs ${zones.length}`);
   assert.ok(out.markers.filter((m) => /Filled/.test(m.text || '')).length >= 5);
+});
+
+test('trading hours filter uses New York time', () => {
+  const at = (h, mi) => ({ time: Date.UTC(2026, 9, 5, h + 4, mi), o: 1, h: 1, l: 1, c: 1 }); // EDT = UTC-4
+  const bars = [at(9, 0), at(10, 0), at(12, 0), at(14, 0)];
+  const { sessionCheck } = require('../fvg_tema_ob.js');
+  const am = sessionCheck('09:30-11:30');
+  assert.deepStrictEqual(bars.map((b) => am(b.time)), [false, true, false, false]);
+  const both = sessionCheck('09:30-11:30 + 13:30-15:30');
+  assert.deepStrictEqual(bars.map((b) => both(b.time / 1000)), [false, true, false, true]); // seconds also work
+});
+
+test('max stop distance skips wide-stop setups', () => {
+  const wide = analyse(breakAndRetest(), base({ filterMode: 'Off', maxRiskPts: 1 }));
+  assert.strictEqual(wide.trades.length, 0);
+});
+
+test('win rate shown on chart', () => {
+  const out = compute(breakAndRetest(), loose({ 'TEMA filter for FVG trades': 'Off', 'Swing strength (candles each side)': 3, 'Candles after break to wait for the FVG': 0 }));
+  assert.ok(out.markers.some((m) => /^Wins 1  Losses 0  Win rate 100%/.test(m.text || '')));
 });
 
 console.log(`\n${passed} tests passed`);

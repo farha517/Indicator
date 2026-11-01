@@ -15,7 +15,15 @@ const showBg     = input.select('TEMA trend background', 'On', ['On', 'Off']);
 const showSwings = input.select('Range High / Low lines', 'On', ['On', 'Off']);
 const showPast   = input.select('Show past FVG trades', 'On', ['On', 'Off']);
 const showTags   = input.select('Price tags on live trade', 'Off', ['On', 'Off']);
-const showMissed = input.select('Show setups that never filled', 'On', ['On', 'Off']);
+const showMissed = input.select('Show setups that never filled', 'Off', ['On', 'Off']);
+const showStats  = input.select('Show win rate on chart', 'On', ['On', 'Off']);
+
+// ── Setup quality filters (fewer, cleaner setups) ───────────────────────────
+const minFvgAtr  = input.float('Min FVG size (x ATR, 0 = off)', 0.25, { min: 0, max: 5 });
+const maxRiskPts = input.float('Max stop distance in points (0 = off)', 0, { min: 0, max: 1000 });
+const obConfl    = input.select('Require order block near FVG', 'Off', ['Off', 'On']);
+const session    = input.select('Trading hours (New York)', 'All day', ['All day', '09:30-11:30', '09:30-16:00', '09:30-11:30 + 13:30-15:30']);
+const oneAtATime = input.select('One setup at a time', 'On', ['On', 'Off']);
 const showObOld  = input.select('Show broken order blocks', 'Off', ['On', 'Off']);
 
 // ── Structure ────────────────────────────────────────────────────────────────
@@ -29,7 +37,7 @@ const tickSize   = input.float('Tick size (MNQ 0.25, MYM 1, MGC 0.1)', 0.25, { m
 const rr         = input.float('Take-profit (R)', 1, { min: 0.1, max: 20 });
 const expiry     = input.int('Cancel limit after N candles', 30, { min: 1, max: 500 });
 const fvgWait    = input.int('Candles after break to wait for the FVG', 2, { min: 0, max: 10 });
-const filterMode = input.select('TEMA filter for FVG trades', 'Off', ['Off', 'Trend', 'Recent cross']);
+const filterMode = input.select('TEMA filter for FVG trades', 'Trend', ['Trend', 'Recent cross', 'Off']);
 const crossLook  = input.int('Recent cross lookback (candles)', 20, { min: 1, max: 500 });
 
 // ── TEMA ─────────────────────────────────────────────────────────────────────
@@ -77,6 +85,12 @@ function readSettings(inputs) {
     showPast: on(v('Show past FVG trades', 'showPast', showPast)),
     showTags: on(v('Price tags on live trade', 'showTags', showTags)),
     showMissed: on(v('Show setups that never filled', 'showMissed', showMissed)),
+    showStats: on(v('Show win rate on chart', 'showStats', showStats)),
+    minFvgAtr: Number(v('Min FVG size (x ATR, 0 = off)', 'minFvgAtr', minFvgAtr)),
+    maxRiskPts: Number(v('Max stop distance in points (0 = off)', 'maxRiskPts', maxRiskPts)),
+    obConfl: on(v('Require order block near FVG', 'obConfl', obConfl)),
+    session: v('Trading hours (New York)', 'session', session),
+    oneAtATime: on(v('One setup at a time', 'oneAtATime', oneAtATime)),
     showObOld: on(v('Show broken order blocks', 'showObOld', showObOld)),
     swingLen: Number(v('Swing strength (candles each side)', 'swingLen', swingLen)),
     entryMode: v('Limit entry', 'entryMode', entryMode),
@@ -143,12 +157,44 @@ function isPivotLow(l, i, len) {
   return true;
 }
 
+function atrArr(h, l, c, len) {
+  const out = new Array(h.length);
+  let prev = h[0] - l[0];
+  for (let i = 0; i < h.length; i++) {
+    const tr = i === 0 ? h[0] - l[0] : Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]));
+    prev = i === 0 ? tr : (prev * (len - 1) + tr) / len; // Wilder smoothing
+    out[i] = prev;
+  }
+  return out;
+}
+
+// Returns time -> bool for the chosen New York trading hours
+function sessionChecker(choice) {
+  if (!choice || choice === 'All day') return () => true;
+  const windows = { '09:30-11:30': [[570, 690]], '09:30-16:00': [[570, 960]], '09:30-11:30 + 13:30-15:30': [[570, 690], [810, 930]] }[choice];
+  if (!windows) return () => true;
+  let fmt = null;
+  try { fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); } catch (e) { fmt = null; }
+  return (time) => {
+    if (time === undefined || time === null || !fmt) return true;
+    let ms = typeof time === 'number' ? time : Date.parse(time);
+    if (!isFinite(ms)) return true;
+    if (ms < 1e11) ms *= 1000; // seconds -> ms
+    const parts = fmt.formatToParts(new Date(ms));
+    const hh = Number(parts.find((p) => p.type === 'hour').value), mm = Number(parts.find((p) => p.type === 'minute').value);
+    const mins = hh * 60 + mm;
+    return windows.some(([a, b]) => mins >= a && mins < b);
+  };
+}
+
 // Runs the whole indicator over the candles. Pure function: easy to test.
 function analyse(bars, s) {
   const n = bars.length;
   const o = bars.map((b) => b.o), h = bars.map((b) => b.h), l = bars.map((b) => b.l), c = bars.map((b) => b.c);
   const last = n - 1;
 
+  const atr = atrArr(h, l, c, 14);
+  const inSession = sessionChecker(s.session);
   const temaF = temaArr(c, s.temaFastLen);
   const temaS = temaArr(c, s.temaSlowLen);
   const warm = (i) => i >= s.temaSlowLen;
@@ -173,12 +219,24 @@ function analyse(bars, s) {
   const makeSetup = (side, t, k, leg) => {
     const isL = side === 'long';
     if (open[side] || !filterOk(side, t)) return false;
+    const other = isL ? 'short' : 'long';
+    if (s.oneAtATime && (open[other] || pend[other])) return false;
+    if (!inSession(bars[t].time)) return false;
     const top = isL ? l[k] : l[k - 2];
     const bot = isL ? h[k - 2] : h[k];
+    // Quality: the gap must be a real displacement, not a 1-tick sliver
+    if (s.minFvgAtr > 0 && top - bot < s.minFvgAtr * atr[t]) return false;
+    // Quality: FVG sits on/near a live order block of the same direction
+    if (s.obConfl) {
+      const pad = 0.5 * atr[t];
+      const near = obs.some((ob) => ob.bull === isL && ob.end === null && top >= ob.bot - pad && bot <= ob.top + pad);
+      if (!near) return false;
+    }
     const entry = s.entryMode === 'FVG edge' ? (isL ? top : bot) : (top + bot) / 2;
     const stop = isL ? (s.slMode === 'Swing' ? l[leg] : bot) - s.slTicks * s.tickSize
                      : (s.slMode === 'Swing' ? h[leg] : top) + s.slTicks * s.tickSize;
     if (isL ? entry <= stop : stop <= entry) return false;
+    if (s.maxRiskPts > 0 && Math.abs(entry - stop) > s.maxRiskPts) return false;
     if (pend[side]) { pend[side].status = 'cancelled'; pend[side].exit = t; }
     const tp = isL ? entry + s.rr * (entry - stop) : entry - s.rr * (stop - entry);
     const tr = { side, setup: t, fvgBar: k - 2, top, bot, entry, stop, tp, fill: null, exit: null, status: 'pending' };
@@ -408,6 +466,13 @@ function render(r, s) {
     }
   }
 
+  if (s.showFvg && s.showStats) {
+    const total = r.wins + r.losses;
+    const pct = total ? Math.round((100 * r.wins) / total) : 0;
+    const text = `Wins ${r.wins}  Losses ${r.losses}  Win rate ${pct}%  Streak ${r.streak}`;
+    markers.push({ x: r.last, y: Math.max(...r.temaF.slice(-1), r.swingHi ? r.swingHi.price : -Infinity), shape: 'label', position: 'above', color: '#FFFFFF', text });
+  }
+
   return { plots, boxes, lines, markers, bgBands };
 }
 
@@ -419,4 +484,4 @@ function compute(bars, inputs, hp) {
 }
 
 // For offline testing in Node (ignored by Hyperprop)
-if (typeof module !== 'undefined' && module.exports) module.exports = { analyse, render, compute, readSettings };
+if (typeof module !== 'undefined' && module.exports) module.exports = { analyse, render, compute, readSettings, sessionCheck: sessionChecker };

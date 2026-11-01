@@ -13,7 +13,17 @@ A custom indicator for **Hyperprop** (app.hyperprop.com) charts, built for MNQ, 
 | **TEMA trend background** | Green when TEMA 8 > TEMA 55, red when it's below |
 | **Range High / Low lines** | Solid green / red lines across the chart at the most recent swing high and swing low |
 
-The **TEMA filter for FVG trades** (Trend / Recent cross / Off) controls whether FVG setups must agree with the TEMA trend. Every colour can be changed in the settings.
+### Setup quality filters (fewer setups)
+| Setting | Default | What it removes |
+|---|---|---|
+| TEMA filter for FVG trades | Trend | Setups against the TEMA 8/55 trend |
+| Min FVG size (x ATR) | 0.25 | Tiny gaps that aren't a real displacement move |
+| One setup at a time | On | New setups while another trade is waiting or open |
+| Max stop distance in points | 0 (off) | Setups whose stop is too far for your account (e.g. 40 on MNQ) |
+| Require order block near FVG | Off | FVGs that don't sit on or near a live order block |
+| Trading hours (New York) | All day | Setups outside 09:30–11:30, 09:30–16:00, or 09:30–11:30 + 13:30–15:30 |
+
+**Show win rate on chart** prints wins, losses, win rate and streak at the last candle, so you can see on real history what each filter does. Every colour can be changed in the settings.
 
 ## Add it in Hyperprop
 1. Open the script editor (**New script**).
