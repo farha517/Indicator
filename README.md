@@ -40,7 +40,7 @@ Intraday futures indicator, in two versions:
 - Stop goes 0.25 ATR past the signal wick (min 0.5 ATR). **One take profit at 1.5R, full exit.**
 - Only **A+** setups: agree with the bias, the next key level is beyond the target, strong close + above-average volume, and the stop fits your risk.
 - One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
-- The daily stop counts the indicator's own setups (stopped out before TP1), not your account fills.
+- The daily stop counts the indicator's own setups (stopped out), not your account fills.
 - **Stats line** (bottom), e.g. `16 trades · 44% win · +$210`: how the A+ setups did on the loaded history at your $ risk.
 - **Chart mode: Minimal** (default) shows the 2 nearest levels above/below, VWAP, today's signals and the plan.
   **Full** shows every level, EMA 9/20 and SMA 200.
