@@ -34,15 +34,14 @@ Intraday futures indicator, in two versions:
 | `SETUP FORMING ▸ wait for close 1:42` | A setup may be building. **Don't enter**, wait for the candle to close. |
 | `GO LONG ▸ up to 28240 · SL 28228 · 3 MNQ ($72)` | Valid entry. Shaded box = entry zone. Valid for 3 candles. |
 | `MISSED ▸ don't chase` | Price left the entry zone. Let it go. |
-| `MANAGE ▸ SL … · TP1 … · no new entries` | In a trade. Hold, no adding. |
-| `TP1 HIT ▸ stop to entry, hold for TP2` | Take partials, move stop to break-even. |
+| `MANAGE ▸ SL … · TP … · hands off` | In a trade. Let the stop or target do the work. |
 | `DONE FOR TODAY ▸ 2 losses` | Stop trading until the next session (6pm ET). |
 
-- Stop goes 0.25 ATR past the signal wick (min 0.5 ATR). **TP1 = 1R: take half, stop to entry. TP2 = next key level.**
-- Only **A+** setups: agree with the bias, ≥1.5R of room to the next level, strong close + above-average volume, and the stop fits your risk.
+- Stop goes 0.25 ATR past the signal wick (min 0.5 ATR). **One take profit at 1.5R, full exit.**
+- Only **A+** setups: agree with the bias, the next key level is beyond the target, strong close + above-average volume, and the stop fits your risk.
 - One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
 - The daily stop counts the indicator's own setups (stopped out before TP1), not your account fills.
-- **Stats line** (bottom): how the A+ setups did on the loaded history: count, % that hit TP1, average R and total R in $ (half off at TP1, rest at TP2 or break-even).
+- **Stats line** (bottom), e.g. `16 trades · 44% win · +$210`: how the A+ setups did on the loaded history at your $ risk.
 - **Chart mode: Minimal** (default) shows the 2 nearest levels above/below, VWAP, today's signals and the plan.
   **Full** shows every level, EMA 9/20 and SMA 200.
 

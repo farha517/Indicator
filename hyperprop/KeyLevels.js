@@ -74,7 +74,7 @@ const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min
 const showPlan = input.bool('Trade plan (entry / stop / targets)', true);
 const aOnly    = input.bool('A+ setups only (with bias + min R:R)', true);
 const minRR    = input.float('Min room to next level (R)', 1.5, { min: 0.5, max: 10, step: 0.25 });
-const tp1R     = input.float('TP1 at (R) — take half, stop to entry', 1, { min: 0.5, max: 5, step: 0.25 });
+const tpR      = input.float('Take profit at (R) — full exit', 1.5, { min: 0.5, max: 5, step: 0.25 });
 const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.25, { min: 0, max: 2, step: 0.05 });
 const minStopK = input.float('Minimum stop (x ATR 14)', 0.5, { min: 0.1, max: 3, step: 0.1 });
 const planBars = input.int('Keep plan on chart (bars)', 48, { min: 5, max: 500 });
@@ -303,20 +303,20 @@ function compute(bars, inputs, hp) {
     tg.sort((p, q) => (dir > 0 ? p.x - q.x : q.x - p.x));
     const uniqT = [];
     for (const t of tg) if (!uniqT.length || Math.abs(t.x - uniqT[uniqT.length - 1].x) > a * 0.25) uniqT.push(t);
-    // room = distance to the next key level; TP1 = fixed R (partial), TP2 = next level
+    // room = distance to the next key level; one take profit at a fixed R (full exit)
     const nextLvl = uniqT[0] || { x: entry + dir * risk * 3, nm: '3R' };
     const room = Math.abs(nextLvl.x - entry) / risk;
-    const t1 = { x: entry + dir * risk * tp1R, nm: tp1R + 'R' };
-    let t2 = nextLvl;
-    if (Math.abs(t2.x - entry) < risk * (tp1R + 0.5)) t2 = uniqT[1] && Math.abs(uniqT[1].x - entry) >= risk * (tp1R + 0.5) ? uniqT[1] : { x: entry + dir * risk * (tp1R + 1), nm: (tp1R + 1) + 'R' };
-    t1.x = dir > 0 ? Math.ceil(t1.x / tick - 1e-9) * tick : Math.floor(t1.x / tick + 1e-9) * tick;
+    let tpx = entry + dir * risk * tpR;
+    tpx = dir > 0 ? Math.ceil(tpx / tick - 1e-9) * tick : Math.floor(tpx / tick + 1e-9) * tick;
+    const t1 = { x: tpx };
     const rr = room;
     const sc = scoreAt(i).score;
     const aligned = dir > 0 ? sc >= 1 : sc <= -1;
     const pv = POINT_VALUE[contract] || 2;
     const qty = Math.min(maxQty, Math.floor(riskUsd / (risk * pv) + 1e-9));
-    const grade = qty < 1 ? 'C' : aligned && rr >= minRR ? 'A+' : rr >= minRR ? 'B' : 'C';
-    return { i, dir, entry, stop, t1, t2, rr, grade, risk, qty, usd: qty * risk * pv };
+    const need = Math.max(minRR, tpR);                 // next level must be beyond the target
+    const grade = qty < 1 ? 'C' : aligned && rr >= need ? 'A+' : rr >= need ? 'B' : 'C';
+    return { i, dir, entry, stop, t1, rr, grade, risk, qty, usd: qty * risk * pv };
   };
 
   // Strict confirmation: candle closes strong in the signal direction, on above-average volume
@@ -332,17 +332,14 @@ function compute(bars, inputs, hp) {
 
   // Resolve how a plan played out using bars up to `upto`
   const resolve = (p, upto) => {
-    let tp1 = false;
     for (let j = p.i + 1; j <= upto; j++) {
-      if (j - p.i > planBars) return tp1 ? 'win' : 'expired';
-      const sl = tp1 ? p.entry : p.stop;
-      if (p.dir > 0 ? L[j] <= sl : H[j] >= sl) return tp1 ? 'be' : 'loss';
-      if (p.dir > 0 ? H[j] >= p.t2.x : L[j] <= p.t2.x) return 'win';
-      if (!tp1 && (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x)) tp1 = true;
+      if (j - p.i > planBars) return 'expired';
+      if (p.dir > 0 ? L[j] <= p.stop : H[j] >= p.stop) return 'loss';     // stop checked first (conservative)
+      if (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x) return 'win';
     }
-    return tp1 ? 'tp1' : 'open';
+    return 'open';
   };
-  const isOpen = st => st === 'open' || st === 'tp1';
+  const isOpen = st => st === 'open';
   const lossesOn = (day, upto) => plans.filter(p => dayKeyA[p.i] === day && resolve(p, upto) === 'loss').length;
 
   // ── Signals ──
@@ -404,18 +401,14 @@ function compute(bars, inputs, hp) {
   if (plan) { plan.status = resolve(plan, last); if (!isOpen(plan.status)) plan = null; }
   const lossesToday = lossesOn(dayKeyA[last], last);
 
-  // Result of a finished plan in R: half off at TP1 (stop to entry), rest at TP2 / BE / expiry close
+  // Result of a finished plan in R: +target R, -1R, or flat at expiry close
   const resultR = p => {
-    let tp1 = false;
-    const r1 = Math.abs(p.t1.x - p.entry) / p.risk, r2 = Math.abs(p.t2.x - p.entry) / p.risk;
-    for (let j = p.i + 1; j <= last; j++) {
-      if (j - p.i > planBars) { const rest = (C[j - 1] - p.entry) * p.dir / p.risk; return { r: tp1 ? 0.5 * r1 + 0.5 * Math.max(0, rest) : rest, tp1 }; }
-      const sl = tp1 ? p.entry : p.stop;
-      if (p.dir > 0 ? L[j] <= sl : H[j] >= sl) return { r: tp1 ? 0.5 * r1 : -1, tp1 };
-      if (p.dir > 0 ? H[j] >= p.t2.x : L[j] <= p.t2.x) return { r: tp1 ? 0.5 * r1 + 0.5 * r2 : r2, tp1: true };
-      if (!tp1 && (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x)) tp1 = true;
-    }
-    return null;   // still open
+    const st = resolve(p, last);
+    if (st === 'open') return null;
+    if (st === 'win') return { r: Math.abs(p.t1.x - p.entry) / p.risk, win: true };
+    if (st === 'loss') return { r: -1, win: false };
+    const j = Math.min(last, p.i + planBars);
+    return { r: (C[j] - p.entry) * p.dir / p.risk, win: false };
   };
   const done = plans.map(resultR).filter(Boolean);
 
@@ -484,7 +477,7 @@ function compute(bars, inputs, hp) {
   // ── Trade plan: entry zone, stop, targets ──
   let zoneEdge = NaN, inZone = false, age = 0;
   if (on(showPlan) && plan) {
-    const d = plan.dir, a = Math.max(1, plan.i), sl = plan.status === 'tp1' ? plan.entry : plan.stop;
+    const d = plan.dir, a = Math.max(1, plan.i), sl = plan.stop;
     age = last - plan.i;
     zoneEdge = plan.entry + d * plan.risk * zoneR;
     zoneEdge = d > 0 ? Math.ceil(zoneEdge / tick - 1e-9) * tick : Math.floor(zoneEdge / tick + 1e-9) * tick;
@@ -498,9 +491,8 @@ function compute(bars, inputs, hp) {
       labels.push({ x: x2, y, text, color: col, textColor: '#ffffff', anchor: 'right' });
     };
     row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + fmt(plan.entry, tick) + ' · ' + sizeTxt(plan));
-    row(sl, resCol, 'solid', plan.status === 'tp1' ? 'SL → BE' : 'SL ' + fmt(sl, tick) + ' (-' + pts(sl) + ')');
-    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 ' + fmt(plan.t1.x, tick) + ' (' + (Math.abs(plan.t1.x - plan.entry) / plan.risk).toFixed(1) + 'R, half off)');
-    row(plan.t2.x, supCol, 'dotted', 'TP2 ' + (plan.t2.nm || '') + ' ' + fmt(plan.t2.x, tick) + ' (' + (Math.abs(plan.t2.x - plan.entry) / plan.risk).toFixed(1) + 'R)');
+    row(sl, resCol, 'solid', 'SL ' + fmt(sl, tick) + ' (-' + pts(sl) + ')');
+    row(plan.t1.x, supCol, 'solid', 'TP ' + fmt(plan.t1.x, tick) + ' (+' + pts(plan.t1.x) + ')');
   }
 
   // ── Coach: ONE clear instruction ──
@@ -527,10 +519,9 @@ function compute(bars, inputs, hp) {
     let text, col;
     if (plan && on(showPlan)) {
       const side = plan.dir > 0 ? 'LONG' : 'SHORT', sc = plan.dir > 0 ? supCol : resCol;
-      if (plan.status === 'tp1') { text = 'TP1 HIT ▸ stop to entry, hold for TP2 ' + fmt(plan.t2.x, tick); col = sc; }
-      else if (age <= entryBars && inZone) { text = 'GO ' + side + ' ▸ ' + (plan.dir > 0 ? 'up to ' : 'down to ') + fmt(zoneEdge, tick) + ' · SL ' + fmt(plan.stop, tick) + ' · ' + sizeTxt(plan); col = sc; }
+      if (age <= entryBars && inZone) { text = 'GO ' + side + ' ▸ ' + (plan.dir > 0 ? 'up to ' : 'down to ') + fmt(zoneEdge, tick) + ' · SL ' + fmt(plan.stop, tick) + ' · ' + sizeTxt(plan); col = sc; }
       else if (age <= entryBars) { text = 'MISSED ▸ don\'t chase'; col = GREY; }
-      else { text = 'MANAGE ▸ SL ' + fmt(plan.stop, tick) + ' · TP1 ' + fmt(plan.t1.x, tick) + ' · no new entries'; col = GREY; }
+      else { text = 'MANAGE ▸ SL ' + fmt(plan.stop, tick) + ' · TP ' + fmt(plan.t1.x, tick) + ' · hands off'; col = GREY; }
     } else if (lossesToday >= maxLoss) { text = 'DONE FOR TODAY ▸ ' + lossesToday + ' losses. Close the chart.'; col = resCol; }
     else if (forming) { text = 'SETUP FORMING (' + (forming.dir > 0 ? 'long' : 'short') + ' ' + forming.lvl + ') ▸ wait for close' + countdown; col = AMBER; }
     else if (atLvl) { text = 'WAIT ▸ at ' + nameOf(atLvl.k) + ', watching for a setup (' + bias + ')'; col = GREY; }
@@ -545,10 +536,11 @@ function compute(bars, inputs, hp) {
     let bot = Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) bot = Math.min(bot, L[i]);
     let text;
-    if (!done.length) text = 'Stats: no finished A+ setups in loaded history yet';
+    if (!done.length) text = 'No finished setups yet';
     else {
-      const hit = done.filter(d => d.tp1).length, tot = done.reduce((a, d) => a + d.r, 0);
-      text = 'Stats: ' + done.length + ' setups · ' + Math.round(100 * hit / done.length) + '% hit TP1 · avg ' + (tot >= 0 ? '+' : '') + (tot / done.length).toFixed(2) + 'R · total ' + (tot >= 0 ? '+' : '') + tot.toFixed(1) + 'R ($' + Math.round(tot * riskUsd) + ')';
+      const hit = done.filter(d => d.win).length, tot = done.reduce((a, d) => a + d.r, 0);
+      const usd = Math.round(tot * riskUsd);
+      text = done.length + ' trades · ' + Math.round(100 * hit / done.length) + '% win · ' + (usd >= 0 ? '+$' : '-$') + Math.abs(usd);
     }
     labels.push({ x: last, y: bot - (atr[last] || 0) * 1.5, text, color: '#37474f', textColor: '#ffffff', anchor: 'up' });
   }
