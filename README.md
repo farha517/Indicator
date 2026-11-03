@@ -9,15 +9,12 @@ Intraday futures indicator, in two versions:
 
 ## What it shows
 - **Levels:** PDH/PDL, prior-day close (PDC) and 50% (PD50), VWAP (resets 6pm ET), PWH/PWL, PMH/PML, ATH, overnight high/low (ONH/ONL, 6pm ET → RTH open), opening range (ORH/ORL)
-- **Moving averages:** EMA 9, EMA 20, SMA 200
+- **Moving averages:** EMA 9, EMA 20, SMA 200 (always used for the trend filters; drawn in Full mode)
 - **Colors:** green = price above the level (support), red = price below (resistance).
   Line style = timeframe: day solid, week dashed, month dotted, ATH thick, ON/OR dotted grey.
-- **Signals** (closed bars only):
-  - `RT` = break & retest (old resistance holding as support, or the reverse)
-  - `SW` = sweep: wick through the level, close back (stop run / failed breakout)
-  - Below the bar = bullish, above = bearish. The text names the level, e.g. `SW PDH`.
-- **Bias label:** BULLISH / BEARISH / NEUTRAL score (−5…+5) from the EMA 9/20 stack, 200 SMA, VWAP, prior-day range and opening range,
-  plus "what to look for" right now and the nearest level above and below.
+- **Signals:** three trend-following setups (PB, RT, SW, below), each scored on your own chart data. Closed candles only.
+- **One instruction at a time** above price (WAIT / FORMING / GO / MISSED / MANAGE / DONE) and a per-setup stats line below.
+- **Chart mode: Minimal** (default) shows only the 2 nearest levels above/below, VWAP, today's signals and the trade plan. **Full** adds every level and EMA 9/20 + SMA 200.
 
 ## Hyperprop setup
 1. New script → Name `Key Levels` → Pane **Overlay** → paste `hyperprop/KeyLevels.js` over the template → **Save & add to chart**.
@@ -26,24 +23,38 @@ Intraday futures indicator, in two versions:
 3. **ATH price:** type the real all-time high. Left at 0, the line shows the highest loaded bar and is labelled `HH`.
 4. If labels don't appear to the right of the last candle, set **Label offset** to 0.
 
-## How it talks to you (one instruction at a time)
-| Label | Meaning |
-|---|---|
-| `WAIT ▸ no level nearby` | Mid-range. Do nothing. |
-| `WAIT ▸ at PDH, watching for a setup` | Price is at a level. Still do nothing. |
-| `SETUP FORMING ▸ wait for close 1:42` | A setup may be building. **Don't enter**, wait for the candle to close. |
-| `GO LONG ▸ up to 28240 · SL 28228 · 3 MNQ ($72)` | Valid entry. Shaded box = entry zone. Valid for 3 candles. |
-| `MISSED ▸ don't chase` | Price left the entry zone. Let it go. |
-| `MANAGE ▸ SL … · TP … · hands off` | In a trade. Let the stop or target do the work. |
-| `DONE FOR TODAY ▸ 2 losses` | Stop trading until the next session (6pm ET). |
+## The three setups (all trade WITH the trend)
+| Setup | What happens | Trend filter |
+|---|---|---|
+| **PB** pullback | Price dips to VWAP or EMA 20, then a strong candle closes back with the trend | EMA 9 > EMA 20, EMA 20 rising, price above VWAP (mirror for shorts) |
+| **RT** retest | Price breaks a key level, comes back to it, holds, strong close | Same short-term trend as PB |
+| **SW** sweep | Price wicks through a key level and closes back (stop run) | 200 SMA rising and price above it (mirror for shorts) |
 
-- Stop goes 0.25 ATR past the signal wick (min 0.5 ATR). **One take profit at 1.5R, full exit.**
-- Only **A+** setups: agree with the bias, the next key level is beyond the target, strong close + above-average volume, and the stop fits your risk.
-- One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
-- The daily stop counts the indicator's own setups (stopped out), not your account fills.
-- **Stats line** (bottom), e.g. `16 trades · 44% win · +$210`: how the A+ setups did on the loaded history at your $ risk.
-- **Chart mode: Minimal** (default) shows the 2 nearest levels above/below, VWAP, today's signals and the plan.
-  **Full** shows every level, EMA 9/20 and SMA 200.
+Every signal also needs a strong close (top/bottom 40% of the candle, in the trade direction) and volume ≥1.2x average.
+Evening (6pm–midnight ET) is stricter: top/bottom 30% and volume ≥1.5x. Midnight–9:30am: no signals.
+
+## Each setup has to prove itself
+The stats line scores every setup separately on the history your chart has loaded, e.g. `PB ✓+$210/12 · RT test 4/10 · SW ✗-$150/11`:
+- **test 4/10** — fewer than 10 trades so far. Signals show grey as **SIM** (practice account only).
+- **✓** — 10+ trades and making money → signals show as **GO**.
+- **✗** — 10+ trades and losing → that setup is switched **off** automatically.
+
+## How it talks to you (one instruction at a time)
+| Label | What you do |
+|---|---|
+| `WAIT ▸ trend up: wait for a dip to VWAP/EMA` | Nothing yet — you know what you're waiting for |
+| `WAIT ▸ no trend, no level: sit on hands` | Nothing |
+| `WAIT ▸ outside your hours` | Nothing |
+| `FORMING PB long ▸ wait for close 1:42` | **Don't enter.** Wait for the candle to close |
+| `GO LONG PB ▸ up to 28240 · SL 28228 · 3 MNQ ($72)` | Enter. Shaded box = valid entry zone (3 candles) |
+| `SIM LONG PB ▸ …` | Same, but the setup is still in test — practice account only |
+| `MISSED ▸ don't chase` | Price left the zone. Let it go |
+| `MANAGE ▸ SL … · TP … · hands off` | In a trade. Let the stop or target do the work |
+| `DONE FOR TODAY ▸ 3 trades taken` / `2 losses` | Stop until the next session (6pm ET) |
+
+- One trade at a time, max 3 trades and 2 losses per trading day (day resets 6pm ET).
+- One take profit at 1.5R, full exit. Stop just past the recent wick.
+- Size = $75 ÷ (stop points × $ per point), capped at 5 contracts.
 
 ## Playbook (what to look for)
 | Situation | Bullish | Bearish |

@@ -57,40 +57,43 @@ const showPx   = input.bool('Prices on labels', true);
 const mergeK   = input.float('Merge labels closer than (x daily ATR)', 0.04, { min: 0, max: 1, step: 0.01 });
 const maxDistK = input.float('Hide levels farther than (x daily ATR, 0 = off)', 0, { min: 0, max: 50, step: 0.5 });
 
-// ── Signals ──
-const showRT   = input.bool('Break & retest markers (RT)', true);
-const showSW   = input.bool('Sweep markers (SW)', true);
-const showBRK  = input.bool('Break markers (BRK)', false);
+// ── Setups (all of them trade WITH the trend) ──
+const usePB    = input.bool('PB: trend pullback to VWAP / EMA 20', true);
+const useRT    = input.bool('RT: break & retest of a level, with trend', true);
+const useSW    = input.bool('SW: sweep reversal at a level, with 200 SMA trend', true);
+const hours    = input.select('Signal hours (NY time)', 'NY + evening', ['NY + evening', 'NY only', 'All sessions']);
+const minN     = input.int('Trades needed before a setup can go LIVE', 10, { min: 3, max: 100 });
 const rtBars   = input.int('Retest window (bars)', 20, { min: 2, max: 500 });
 const tolK     = input.float('Touch tolerance (x ATR 14)', 0.25, { min: 0, max: 5, step: 0.05 });
-const sigDays  = input.int('Show signals from last N days', 3, { min: 1, max: 60 });
-const coolBars = input.int('Cooldown per level (bars)', 12, { min: 0, max: 500 });
-const strict   = input.bool('Strict confirmation (strong close + volume)', true);
-const closeK   = input.float('Close in top/bottom part of candle', 0.4, { min: 0.1, max: 0.5, step: 0.05 });
-const volK     = input.float('Volume vs 20-bar average (x)', 1.2, { min: 0, max: 5, step: 0.1 });
+const sigDays  = input.int('Full mode: show signals from last N days', 3, { min: 1, max: 60 });
+const coolBars = input.int('Cooldown per setup/level (bars)', 12, { min: 0, max: 500 });
+const closeK   = input.float('NY: close in top/bottom part of candle', 0.4, { min: 0.1, max: 0.5, step: 0.05 });
+const volK     = input.float('NY: volume vs 20-bar average (x)', 1.2, { min: 0, max: 5, step: 0.1 });
+const eveCloseK = input.float('Evening: close in top/bottom part', 0.3, { min: 0.1, max: 0.5, step: 0.05 });
+const eveVolK  = input.float('Evening: volume vs 20-bar average (x)', 1.5, { min: 0, max: 5, step: 0.1 });
 const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min: 0, max: 5, step: 0.05 });
 
 // ── Trade plan ──
-const showPlan = input.bool('Trade plan (entry / stop / targets)', true);
-const aOnly    = input.bool('A+ setups only (with bias + min R:R)', true);
+const showPlan = input.bool('Trade plan (entry / stop / target)', true);
 const minRR    = input.float('Min room to next level (R)', 1.5, { min: 0.5, max: 10, step: 0.25 });
 const tpR      = input.float('Take profit at (R) — full exit', 1.5, { min: 0.5, max: 5, step: 0.25 });
 const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.25, { min: 0, max: 2, step: 0.05 });
 const minStopK = input.float('Minimum stop (x ATR 14)', 0.5, { min: 0.1, max: 3, step: 0.1 });
-const planBars = input.int('Keep plan on chart (bars)', 48, { min: 5, max: 500 });
+const planBars = input.int('Max bars in a trade', 48, { min: 5, max: 500 });
 
 // ── Risk (prop account) ──
 const riskUsd  = input.float('Risk per trade ($)', 75, { min: 5, max: 10000, step: 5 });
 const contract = input.select('Contract', 'MNQ', ['MNQ', 'NQ', 'MES', 'ES', 'M2K', 'RTY', 'MYM', 'YM', 'MGC', 'GC', 'MCL', 'CL']);
 const maxQty   = input.int('Max contracts', 5, { min: 1, max: 100 });
+const maxTrades = input.int('Daily cap: trades', 3, { min: 1, max: 20 });
 const maxLoss  = input.int('Daily stop: losses', 2, { min: 1, max: 10 });
 const entryBars = input.int('Entry valid for (bars after signal)', 3, { min: 1, max: 20 });
 const zoneR    = input.float('Entry zone (x risk past entry)', 0.3, { min: 0.05, max: 1, step: 0.05 });
 
-// ── Coach label ──
-const showInfo = input.bool('Bias / what-to-do label', true);
+// ── Coach / stats ──
+const showInfo = input.bool('What-to-do label', true);
 const nearK    = input.float("'At a level' distance (x ATR 14)", 1, { min: 0, max: 10, step: 0.25 });
-const showStats = input.bool('Stats line (how A+ setups did)', true);
+const showStats = input.bool('Stats line per setup', true);
 const debug    = input.bool('Debug info', false);
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -174,6 +177,7 @@ function compute(bars, inputs, hp) {
   const lv = NAMES.map(() => new Array(n).fill(NaN));
   const inRTHa = new Array(n).fill(false), inONa = new Array(n).fill(false), orDoneA = new Array(n).fill(false);
   const dayKeyA = new Array(n);
+  const minA = new Array(n).fill(0);
 
   let dKey = null, wKey = null, mKey = null;
   let dCount = 0, wCount = 0, mCount = 0;
@@ -227,6 +231,7 @@ function compute(bars, inputs, hp) {
     wasRTH = inRTH;
     if (inON) { onH = isNaN(onH) ? H[i] : Math.max(onH, H[i]); onL = isNaN(onL) ? L[i] : Math.min(onL, L[i]); }
     if (inOR) { orH = isNaN(orH) ? H[i] : Math.max(orH, H[i]); orL = isNaN(orL) ? L[i] : Math.min(orL, L[i]); }
+    minA[i] = minOfDay;
     inRTHa[i] = inRTH; inONa[i] = inON; orDoneA[i] = inRTH && !inOR && !isNaN(orH);
 
     // Levels for this bar (prior periods only count when fully loaded)
@@ -286,122 +291,74 @@ function compute(bars, inputs, hp) {
     return { score: emaS + smaS + pdS + orS + vwS, pdS };
   };
 
-  // Build a trade plan for a signal: stop past the wick, targets = next levels
-  const planFor = (i, dir) => {
-    const a = atr[i] || 0;
-    const entry = C[i];
-    let stop = dir > 0 ? L[i] - a * stopBufK : H[i] + a * stopBufK;
-    if (Math.abs(entry - stop) < a * minStopK) stop = entry - dir * a * minStopK;
-    stop = dir > 0 ? Math.floor(stop / tick + 1e-9) * tick : Math.ceil(stop / tick - 1e-9) * tick;
-    const risk = Math.abs(entry - stop);
-    const tg = [];
-    for (let k = 0; k < NAMES.length; k++) {
-      const x = lv[k][i];
-      if (isNaN(x)) continue;
-      if (dir > 0 ? x > entry + a * 0.1 : x < entry - a * 0.1) tg.push({ x, nm: nameOf(k) });
-    }
-    tg.sort((p, q) => (dir > 0 ? p.x - q.x : q.x - p.x));
-    const uniqT = [];
-    for (const t of tg) if (!uniqT.length || Math.abs(t.x - uniqT[uniqT.length - 1].x) > a * 0.25) uniqT.push(t);
-    // room = distance to the next key level; one take profit at a fixed R (full exit)
-    const nextLvl = uniqT[0] || { x: entry + dir * risk * 3, nm: '3R' };
-    const room = Math.abs(nextLvl.x - entry) / risk;
-    let tpx = entry + dir * risk * tpR;
-    tpx = dir > 0 ? Math.ceil(tpx / tick - 1e-9) * tick : Math.floor(tpx / tick + 1e-9) * tick;
-    const t1 = { x: tpx };
-    const rr = room;
-    const sc = scoreAt(i).score;
-    const aligned = dir > 0 ? sc >= 1 : sc <= -1;
-    const pv = POINT_VALUE[contract] || 2;
-    const qty = Math.min(maxQty, Math.floor(riskUsd / (risk * pv) + 1e-9));
-    const need = Math.max(minRR, tpR);                 // next level must be beyond the target
-    const grade = qty < 1 ? 'C' : aligned && rr >= need ? 'A+' : rr >= need ? 'B' : 'C';
-    return { i, dir, entry, stop, t1, rr, grade, risk, qty, usd: qty * risk * pv };
+  // ── Trend filters ──
+  // short-term: EMA 9 above/below EMA 20, EMA 20 sloping, price on the right side of VWAP
+  const trendAt = i => {
+    if (i < 3) return 0;
+    const a = num(e9[i]), b = num(e20[i]), b3 = num(e20[i - 3]), vw = vwap[i];
+    if (isNaN(a) || isNaN(b) || isNaN(b3)) return 0;
+    const vwOk = d => vw == null || vwBarsA[i] < 6 || (d > 0 ? C[i] > vw : C[i] < vw);
+    if (a > b && b > b3 && vwOk(1)) return 1;
+    if (a < b && b < b3 && vwOk(-1)) return -1;
+    return 0;
   };
+  // bigger trend: 200 SMA rising/falling with price on that side
+  const bigTrendAt = i => {
+    if (i < 10) return 0;
+    const sv = num(s200[i]), s10 = num(s200[i - 10]);
+    if (isNaN(sv) || isNaN(s10)) return 0;
+    return sv > s10 && C[i] > sv ? 1 : sv < s10 && C[i] < sv ? -1 : 0;
+  };
+  const sessionOf = i => (inRTHa[i] ? 'ny' : minA[i] >= 18 * 60 ? 'eve' : 'off');
+  const allowed = i => (hours === 'All sessions' ? true : hours === 'NY only' ? sessionOf(i) === 'ny' : sessionOf(i) !== 'off');
 
-  // Strict confirmation: candle closes strong in the signal direction, on above-average volume
+  // Confirmation: strong close in the trade direction on above-average volume (stricter outside NY hours)
   const confirm = (i, dir, live) => {
-    if (!on(strict)) return true;
+    const ny = sessionOf(i) === 'ny';
+    const ck = ny ? closeK : eveCloseK, vk = ny ? volK : eveVolK;
     const rng = H[i] - L[i];
     if (rng <= 0) return false;
-    const pos = (C[i] - L[i]) / rng;                  // 0 = closed at low, 1 = closed at high
-    const strong = dir > 0 ? pos >= 1 - closeK : pos <= closeK;
-    const volOk = live || !hasVol || volK <= 0 || isNaN(avgVol[i]) || V[i] >= avgVol[i] * volK;
+    const pos = (C[i] - L[i]) / rng;
+    const strong = (dir > 0 ? pos >= 1 - ck : pos <= ck) && (dir > 0 ? C[i] > O[i] : C[i] < O[i]);
+    const volOk = live || !hasVol || vk <= 0 || isNaN(avgVol[i]) || V[i] >= avgVol[i] * vk;
     return strong && volOk;
   };
 
-  // Resolve how a plan played out using bars up to `upto`
+  // Trade plan: stop past the recent wick, one target at tpR, needs room to the next level
+  const planFor = (i, dir, look) => {
+    const a = atr[i] || 0;
+    const entry = C[i];
+    let ext = dir > 0 ? Infinity : -Infinity;
+    for (let j = Math.max(0, i - look + 1); j <= i; j++) ext = dir > 0 ? Math.min(ext, L[j]) : Math.max(ext, H[j]);
+    let stop = ext - dir * a * stopBufK;
+    if (Math.abs(entry - stop) < a * minStopK) stop = entry - dir * a * minStopK;
+    stop = dir > 0 ? Math.floor(stop / tick + 1e-9) * tick : Math.ceil(stop / tick - 1e-9) * tick;
+    const risk = Math.abs(entry - stop);
+    if (!(risk > 0)) return null;
+    let room = Infinity;
+    for (let k = 0; k < NAMES.length; k++) {
+      const x = lv[k][i];
+      if (isNaN(x)) continue;
+      const d = (x - entry) * dir;
+      if (d > a * 0.1) room = Math.min(room, d / risk);
+    }
+    let tpx = entry + dir * risk * tpR;
+    tpx = dir > 0 ? Math.ceil(tpx / tick - 1e-9) * tick : Math.floor(tpx / tick + 1e-9) * tick;
+    const pv = POINT_VALUE[contract] || 2;
+    const qty = Math.min(maxQty, Math.floor(riskUsd / (risk * pv) + 1e-9));
+    if (qty < 1 || room < Math.max(minRR, tpR)) return null;
+    return { i, dir, entry, stop, t1: { x: tpx }, risk, room, qty, usd: qty * risk * pv };
+  };
+
+  // Outcome of a plan using bars up to `upto` (stop checked first = conservative)
   const resolve = (p, upto) => {
     for (let j = p.i + 1; j <= upto; j++) {
       if (j - p.i > planBars) return 'expired';
-      if (p.dir > 0 ? L[j] <= p.stop : H[j] >= p.stop) return 'loss';     // stop checked first (conservative)
+      if (p.dir > 0 ? L[j] <= p.stop : H[j] >= p.stop) return 'loss';
       if (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x) return 'win';
     }
     return 'open';
   };
-  const isOpen = st => st === 'open';
-  const lossesOn = (day, upto) => plans.filter(p => dayKeyA[p.i] === day && resolve(p, upto) === 'loss').length;
-
-  // ── Signals ──
-  const markers = [];
-  const plans = [];
-  let forming = null;
-  const lastSig = new Array(NAMES.length).fill(-1e9);
-  const state = new Array(NAMES.length).fill(0), stBar = new Array(NAMES.length).fill(0), lastLv = new Array(NAMES.length).fill(NaN);
-  const minimal = chartMode === 'Minimal';
-  const firstSigDay = dayKeyA[last] - (minimal ? 1 : sigDays) + 1;
-
-  for (let i = 1; i <= last; i++) {
-    const live = i === last;                          // unfinished bar: only "forming", never a signal
-    const tol = (atr[i] || 0) * tolK;
-    let bull = [], bear = [], bullNm = [], bearNm = [];
-    for (let k = 0; k < NAMES.length; k++) {
-      const x = lv[k][i];
-      if (isNaN(x) || !eligible(k, i)) { state[k] = 0; lastLv[k] = x; continue; }
-      if (x !== lastLv[k] && k !== VW) { state[k] = 0; }
-      lastLv[k] = x;
-      const xp = k === VW && !isNaN(lv[k][i - 1]) ? lv[k][i - 1] : x;   // level on the previous bar
-      const nm = nameOf(k);
-      const ready = i - lastSig[k] > coolBars;      // one signal per level per cooldown
-      const fire = (arr, arrNm, tag) => { if (ready) { arr.push(tag); arrNm.push(nm); if (!live) lastSig[k] = i; } };
-      const up = C[i] > x && C[i - 1] <= xp, dn = C[i] < x && C[i - 1] >= xp;
-      if (up) { if (!live) { state[k] = 1; stBar[k] = i; } }
-      else if (dn) { if (!live) { state[k] = -1; stBar[k] = i; } }
-      else if (state[k] !== 0 && i - stBar[k] > rtBars) state[k] = 0;
-      else if (state[k] === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x && confirm(i, 1, live)) { if (!live) state[k] = 0; if (on(showRT)) fire(bull, bullNm, 'RT'); }
-      else if (state[k] === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x && confirm(i, -1, live)) { if (!live) state[k] = 0; if (on(showRT)) fire(bear, bearNm, 'RT'); }
-      if (on(showSW)) {
-        const minWick = (atr[i] || 0) * swMinK;
-        if (H[i] - x >= minWick && H[i] > x && C[i] < x && O[i] < x && C[i - 1] < xp && confirm(i, -1, live)) fire(bear, bearNm, 'SW');
-        if (x - L[i] >= minWick && L[i] < x && C[i] > x && O[i] > x && C[i - 1] > xp && confirm(i, 1, live)) fire(bull, bullNm, 'SW');
-      }
-    }
-
-    const uniq = a => Array.from(new Set(a));
-    for (const [dir, tags, nms] of [[1, bull, bullNm], [-1, bear, bearNm]]) {
-      if (!tags.length) continue;
-      const pl = planFor(i, dir);
-      if (aOnly && pl.grade !== 'A+') continue;
-      // patience rules: one trade at a time, and stop for the day after N losses
-      const prev = plans[plans.length - 1];
-      if (prev && isOpen(resolve(prev, i))) continue;
-      if (lossesOn(dayKeyA[i], i) >= maxLoss) continue;
-      Object.assign(pl, { tag: uniq(tags).join(' '), lvl: uniq(nms)[0] });
-      if (live) { forming = pl; continue; }
-      plans.push(pl);
-      if (dayKeyA[i] < firstSigDay) continue;
-      const col = dir > 0 ? supCol : resCol;
-      const txt = (dir > 0 ? '▲ ' : '▼ ') + pl.grade + ' ' + pl.tag + ' ' + pl.lvl + ' room ' + pl.rr.toFixed(1) + 'R';
-      markers.push({ x: i, y: dir > 0 ? L[i] : H[i], position: dir > 0 ? 'below' : 'above', color: col, text: txt, textColor: col });
-    }
-  }
-
-  // Current plan (latest one, if still open)
-  let plan = plans[plans.length - 1] || null;
-  if (plan) { plan.status = resolve(plan, last); if (!isOpen(plan.status)) plan = null; }
-  const lossesToday = lossesOn(dayKeyA[last], last);
-
-  // Result of a finished plan in R: +target R, -1R, or flat at expiry close
   const resultR = p => {
     const st = resolve(p, last);
     if (st === 'open') return null;
@@ -410,7 +367,107 @@ function compute(bars, inputs, hp) {
     const j = Math.min(last, p.i + planBars);
     return { r: (C[j] - p.entry) * p.dir / p.risk, win: false };
   };
-  const done = plans.map(resultR).filter(Boolean);
+
+  // ── Detect setups on every bar (the live bar only counts as "forming") ──
+  const cands = [];
+  const lastSig = new Array(NAMES.length).fill(-1e9);
+  const state = new Array(NAMES.length).fill(0), stBar = new Array(NAMES.length).fill(0), lastLv = new Array(NAMES.length).fill(NaN);
+  let lastPB = -1e9;
+
+  for (let i = 1; i <= last; i++) {
+    const live = i === last;
+    const tol = (atr[i] || 0) * tolK;
+    const tr = trendAt(i), big = bigTrendAt(i);
+    const add = (setup, dir, lvl, look) => {
+      const pl = planFor(i, dir, look);
+      if (pl) cands.push(Object.assign(pl, { setup, lvl, live }));
+    };
+
+    // RT + SW at key levels
+    for (let k = 0; k < NAMES.length; k++) {
+      const x = lv[k][i];
+      if (isNaN(x) || !eligible(k, i)) { state[k] = 0; lastLv[k] = x; continue; }
+      if (x !== lastLv[k] && k !== VW) state[k] = 0;
+      lastLv[k] = x;
+      const xp = k === VW && !isNaN(lv[k][i - 1]) ? lv[k][i - 1] : x;
+      const ready = i - lastSig[k] > coolBars;
+      const fire = (setup, dir) => { if (ready) { add(setup, dir, nameOf(k), 1); if (!live) lastSig[k] = i; } };
+      const up = C[i] > x && C[i - 1] <= xp, dn = C[i] < x && C[i - 1] >= xp;
+      if (up) { if (!live) { state[k] = 1; stBar[k] = i; } }
+      else if (dn) { if (!live) { state[k] = -1; stBar[k] = i; } }
+      else if (state[k] !== 0 && i - stBar[k] > rtBars) state[k] = 0;
+      else if (useRT && state[k] === 1 && tr === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x && confirm(i, 1, live)) { if (!live) state[k] = 0; fire('RT', 1); }
+      else if (useRT && state[k] === -1 && tr === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x && confirm(i, -1, live)) { if (!live) state[k] = 0; fire('RT', -1); }
+      if (useSW) {
+        const minWick = (atr[i] || 0) * swMinK;
+        if (big === -1 && H[i] - x >= minWick && C[i] < x && O[i] < x && C[i - 1] < xp && confirm(i, -1, live)) fire('SW', -1);
+        if (big === 1 && x - L[i] >= minWick && C[i] > x && O[i] > x && C[i - 1] > xp && confirm(i, 1, live)) fire('SW', 1);
+      }
+    }
+
+    // PB: pullback to VWAP / EMA 20 in a trend, then a strong candle back with the trend
+    if (usePB && tr !== 0 && i - lastPB > coolBars) {
+      const refs = [];
+      const ev = num(e20[i]);
+      if (!isNaN(ev)) refs.push({ x: ev, nm: 'EMA20' });
+      if (vwap[i] != null && vwBarsA[i] >= 6) refs.push({ x: vwap[i], nm: 'VWAP' });
+      const hit = refs.find(r => (tr > 0 ? L[i] <= r.x + tol && C[i] > r.x : H[i] >= r.x - tol && C[i] < r.x));
+      if (hit && confirm(i, tr, live)) { add('PB', tr, hit.nm, 3); if (!live) lastPB = i; }
+    }
+  }
+
+  // ── Score each setup on its own (every signal in your hours, one trade at a time) ──
+  const SETUPS = [['PB', usePB], ['RT', useRT], ['SW', useSW]].filter(x => on(x[1])).map(x => x[0]);
+  const stats = {};
+  for (const su of SETUPS) {
+    let open = null; const rs = [];
+    for (const c of cands) {
+      if (c.live || c.setup !== su || !allowed(c.i)) continue;
+      if (open && resolve(open, c.i) === 'open') continue;
+      open = c;
+      const r = resultR(c);
+      if (r) rs.push(r);
+    }
+    const nT = rs.length, wins = rs.filter(r => r.win).length, R = rs.reduce((a, r) => a + r.r, 0);
+    stats[su] = { n: nT, wins, R, status: nT < minN ? 'TEST' : R > 0 ? 'LIVE' : 'OFF' };
+  }
+
+  // ── Pick the trades you would actually take: your hours, LIVE/TEST setups, caps ──
+  const plans = [];
+  const tradesOn = day => plans.filter(p => dayKeyA[p.i] === day).length;
+  const lossesOn = (day, upto) => plans.filter(p => dayKeyA[p.i] === day && resolve(p, upto) === 'loss').length;
+  const blockedAt = i => {
+    if (!allowed(i)) return 'hours';
+    const prev = plans[plans.length - 1];
+    if (prev && resolve(prev, i) === 'open') return 'open';
+    if (lossesOn(dayKeyA[i], i) >= maxLoss) return 'losses';
+    if (tradesOn(dayKeyA[i]) >= maxTrades) return 'trades';
+    return '';
+  };
+  let forming = null;
+  for (const c of cands) {
+    const st = stats[c.setup];
+    if (!st || st.status === 'OFF') continue;
+    if (blockedAt(c.i)) continue;
+    c.status = st.status;
+    if (c.live) { forming = forming || c; continue; }
+    if (plans.length && plans[plans.length - 1].i === c.i) continue;   // one trade per bar
+    plans.push(c);
+  }
+
+  const minimal = chartMode === 'Minimal';
+  const firstSigDay = dayKeyA[last] - (minimal ? 1 : sigDays) + 1;
+  const markers = [];
+  for (const p of plans) {
+    if (dayKeyA[p.i] < firstSigDay) continue;
+    const col = p.status === 'TEST' ? '#9e9e9e' : p.dir > 0 ? supCol : resCol;
+    markers.push({ x: p.i, y: p.dir > 0 ? L[p.i] : H[p.i], position: p.dir > 0 ? 'below' : 'above', color: col, text: (p.dir > 0 ? '▲ ' : '▼ ') + p.setup + ' ' + p.lvl + (p.status === 'TEST' ? ' (test)' : ''), textColor: col });
+  }
+
+  let plan = plans[plans.length - 1] || null;
+  if (plan) { plan.state = resolve(plan, last); if (plan.state !== 'open') plan = null; }
+  const lossesToday = lossesOn(dayKeyA[last], last);
+  const tradesToday = tradesOn(dayKeyA[last]);
 
   // ── Level lines + merged labels (current values only) ──
   const lines = [], labels = [];
@@ -482,7 +539,7 @@ function compute(bars, inputs, hp) {
     zoneEdge = plan.entry + d * plan.risk * zoneR;
     zoneEdge = d > 0 ? Math.ceil(zoneEdge / tick - 1e-9) * tick : Math.floor(zoneEdge / tick + 1e-9) * tick;
     inZone = d > 0 ? px <= zoneEdge && px > plan.stop : px >= zoneEdge && px < plan.stop;
-    if (age <= entryBars && plan.status === 'open') {
+    if (age <= entryBars) {
       boxes.push({ x1: a, y1: plan.entry - d * plan.risk * 0.05, x2: x2, y2: zoneEdge, bg: rgba(d > 0 ? supCol : resCol, 0.18), border: rgba(d > 0 ? supCol : resCol, 0.5), borderWidth: 1 });
     }
     const pts = v => fmt(Math.abs(v - plan.entry), tick);
@@ -490,15 +547,13 @@ function compute(bars, inputs, hp) {
       lines.push({ x1: a, y1: y, x2: x2, y2: y, color: col, width: 2, style });
       labels.push({ x: x2, y, text, color: col, textColor: '#ffffff', anchor: 'right' });
     };
-    row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + fmt(plan.entry, tick) + ' · ' + sizeTxt(plan));
+    row(plan.entry, '#9e9e9e', 'dashed', (plan.status === 'TEST' ? 'SIM ' : '') + (d > 0 ? 'LONG ' : 'SHORT ') + plan.setup + ' ' + fmt(plan.entry, tick) + ' · ' + sizeTxt(plan));
     row(sl, resCol, 'solid', 'SL ' + fmt(sl, tick) + ' (-' + pts(sl) + ')');
     row(plan.t1.x, supCol, 'solid', 'TP ' + fmt(plan.t1.x, tick) + ' (+' + pts(plan.t1.x) + ')');
   }
 
   // ── Coach: ONE clear instruction ──
   if (on(showInfo)) {
-    const { score } = scoreAt(last);
-    const bias = score >= 2 ? 'bull' : score <= -2 ? 'bear' : 'neutral';
     let up = null, dn = null;
     for (let k = 0; k < NAMES.length; k++) {
       const x = lv[k][last];
@@ -508,6 +563,8 @@ function compute(bars, inputs, hp) {
     }
     const near = (atr[last] || 0) * nearK;
     const atLvl = up && up.x - px <= near && (!dn || up.x - px <= px - dn.x) ? up : dn && px - dn.x <= near ? dn : null;
+    const tr = trendAt(last);
+    const trTxt = tr > 0 ? 'trend up' : tr < 0 ? 'trend down' : 'no trend';
 
     let countdown = '';
     try {
@@ -518,36 +575,42 @@ function compute(bars, inputs, hp) {
     const GREY = '#616161', AMBER = '#ff8f00';
     let text, col;
     if (plan && on(showPlan)) {
-      const side = plan.dir > 0 ? 'LONG' : 'SHORT', sc = plan.dir > 0 ? supCol : resCol;
-      if (age <= entryBars && inZone) { text = 'GO ' + side + ' ▸ ' + (plan.dir > 0 ? 'up to ' : 'down to ') + fmt(zoneEdge, tick) + ' · SL ' + fmt(plan.stop, tick) + ' · ' + sizeTxt(plan); col = sc; }
+      const side = plan.dir > 0 ? 'LONG' : 'SHORT', sc = plan.status === 'TEST' ? '#757575' : plan.dir > 0 ? supCol : resCol;
+      const go = plan.status === 'TEST' ? 'SIM ' : 'GO ';
+      if (age <= entryBars && inZone) { text = go + side + ' ' + plan.setup + ' ▸ ' + (plan.dir > 0 ? 'up to ' : 'down to ') + fmt(zoneEdge, tick) + ' · SL ' + fmt(plan.stop, tick) + ' · ' + sizeTxt(plan); col = sc; }
       else if (age <= entryBars) { text = 'MISSED ▸ don\'t chase'; col = GREY; }
       else { text = 'MANAGE ▸ SL ' + fmt(plan.stop, tick) + ' · TP ' + fmt(plan.t1.x, tick) + ' · hands off'; col = GREY; }
-    } else if (lossesToday >= maxLoss) { text = 'DONE FOR TODAY ▸ ' + lossesToday + ' losses. Close the chart.'; col = resCol; }
-    else if (forming) { text = 'SETUP FORMING (' + (forming.dir > 0 ? 'long' : 'short') + ' ' + forming.lvl + ') ▸ wait for close' + countdown; col = AMBER; }
-    else if (atLvl) { text = 'WAIT ▸ at ' + nameOf(atLvl.k) + ', watching for a setup (' + bias + ')'; col = GREY; }
-    else { text = 'WAIT ▸ no level nearby (' + bias + ')'; col = GREY; }
+    }
+    else if (lossesToday >= maxLoss) { text = 'DONE FOR TODAY ▸ ' + lossesToday + ' losses. Close the chart.'; col = resCol; }
+    else if (tradesToday >= maxTrades) { text = 'DONE FOR TODAY ▸ ' + tradesToday + ' trades taken.'; col = resCol; }
+    else if (!allowed(last)) { text = 'WAIT ▸ outside your hours'; col = GREY; }
+    else if (forming) { text = 'FORMING ' + forming.setup + ' ' + (forming.dir > 0 ? 'long' : 'short') + ' ▸ wait for close' + countdown; col = AMBER; }
+    else if (atLvl) { text = 'WAIT ▸ at ' + nameOf(atLvl.k) + ' · ' + trTxt; col = GREY; }
+    else if (tr > 0) { text = 'WAIT ▸ trend up: wait for a dip to VWAP/EMA'; col = GREY; }
+    else if (tr < 0) { text = 'WAIT ▸ trend down: wait for a pop to VWAP/EMA'; col = GREY; }
+    else { text = 'WAIT ▸ no trend, no level: sit on hands'; col = GREY; }
 
     let top = -Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) top = Math.max(top, H[i]);
     labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text, color: col, textColor: '#ffffff', anchor: 'down' });
   }
 
-  if (on(showStats)) {
+  // ── Stats per setup: PB ✓+$210/12 · RT test 4/10 · SW ✗-$150/11 ──
+  if (on(showStats) && SETUPS.length) {
     let bot = Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) bot = Math.min(bot, L[i]);
-    let text;
-    if (!done.length) text = 'No finished setups yet';
-    else {
-      const hit = done.filter(d => d.win).length, tot = done.reduce((a, d) => a + d.r, 0);
-      const usd = Math.round(tot * riskUsd);
-      text = done.length + ' trades · ' + Math.round(100 * hit / done.length) + '% win · ' + (usd >= 0 ? '+$' : '-$') + Math.abs(usd);
-    }
+    const money = R => { const u = Math.round(R * riskUsd); return (u >= 0 ? '+$' : '-$') + Math.abs(u); };
+    const text = SETUPS.map(su => {
+      const st = stats[su];
+      if (st.status === 'TEST') return su + ' test ' + st.n + '/' + minN;
+      return su + (st.status === 'LIVE' ? ' ✓' : ' ✗') + money(st.R) + '/' + st.n;
+    }).join(' · ');
     labels.push({ x: last, y: bot - (atr[last] || 0) * 1.5, text, color: '#37474f', textColor: '#ffffff', anchor: 'up' });
   }
 
   if (on(debug) || !timeOk) {
     const t0 = bars[last].time;
-    labels.push({ x: last, y: L[last] - (atr[last] || 0) * 3, text: 'time=' + JSON.stringify(t0) + ' (' + typeof t0 + ') ms=' + tms[last] + ' days=' + (timeOk ? new Set(dayKeyA).size : 'n/a') + ' BRK=' + JSON.stringify(showBRK), color: '#424242', textColor: '#ffffff', anchor: 'up' });
+    labels.push({ x: last, y: L[last] - (atr[last] || 0) * 3, text: 'time=' + JSON.stringify(t0) + ' (' + typeof t0 + ') ms=' + tms[last] + ' days=' + (timeOk ? new Set(dayKeyA).size : 'n/a') + ' cands=' + cands.length, color: '#424242', textColor: '#ffffff', anchor: 'up' });
   }
 
   return { plots, lines, labels, markers, boxes };
