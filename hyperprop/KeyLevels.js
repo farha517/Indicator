@@ -305,7 +305,7 @@ function compute(bars, inputs, hp) {
       const onlyBrk = tags.every(t => t === 'BRK');
       const pl = onlyBrk ? null : planFor(i, dir);
       if (pl && aOnly && pl.grade !== 'A+') continue;
-      const txt = (pl ? pl.grade + ' ' : '') + uniq(tags).join(' ') + ' ' + uniq(nms)[0] + (pl ? ' ' + pl.rr.toFixed(1) + 'R' : '');
+      const txt = (dir > 0 ? '▲ ' : '▼ ') + (pl ? pl.grade + ' ' : '') + uniq(tags).join(' ') + ' ' + uniq(nms)[0] + (pl ? ' ' + pl.rr.toFixed(1) + 'R' : '');
       const col = dir > 0 ? supCol : resCol;
       markers.push({ x: i, y: dir > 0 ? L[i] : H[i], position: dir > 0 ? 'below' : 'above', color: col, text: txt, textColor: col });
       if (pl && (pl.grade === 'A+' || !aOnly)) plan = Object.assign(pl, { tag: uniq(tags).join(' '), lvl: uniq(nms)[0] });
