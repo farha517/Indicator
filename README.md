@@ -38,7 +38,8 @@ Intraday futures indicator, in two versions:
 | `TP1 HIT ▸ stop to entry, hold for TP2` | Take partials, move stop to break-even. |
 | `DONE FOR TODAY ▸ 2 losses` | Stop trading until the next session (6pm ET). |
 
-- Only **A+** setups: agree with the bias, ≥1.5R to TP1, strong close + above-average volume, and the stop fits your risk.
+- Stop goes 0.25 ATR past the signal wick (min 0.5 ATR). **TP1 = 1R: take half, stop to entry. TP2 = next key level.**
+- Only **A+** setups: agree with the bias, ≥1.5R of room to the next level, strong close + above-average volume, and the stop fits your risk.
 - One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
 - The daily stop counts the indicator's own setups (stopped out before TP1), not your account fills.
 - **Stats line** (bottom): how the A+ setups did on the loaded history: count, % that hit TP1, average R and total R in $ (half off at TP1, rest at TP2 or break-even).

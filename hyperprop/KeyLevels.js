@@ -73,8 +73,10 @@ const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min
 // ── Trade plan ──
 const showPlan = input.bool('Trade plan (entry / stop / targets)', true);
 const aOnly    = input.bool('A+ setups only (with bias + min R:R)', true);
-const minRR    = input.float('Min reward:risk to TP1', 1.5, { min: 0.5, max: 10, step: 0.25 });
-const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.1, { min: 0, max: 2, step: 0.05 });
+const minRR    = input.float('Min room to next level (R)', 1.5, { min: 0.5, max: 10, step: 0.25 });
+const tp1R     = input.float('TP1 at (R) — take half, stop to entry', 1, { min: 0.5, max: 5, step: 0.25 });
+const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.25, { min: 0, max: 2, step: 0.05 });
+const minStopK = input.float('Minimum stop (x ATR 14)', 0.5, { min: 0.1, max: 3, step: 0.1 });
 const planBars = input.int('Keep plan on chart (bars)', 48, { min: 5, max: 500 });
 
 // ── Risk (prop account) ──
@@ -289,7 +291,7 @@ function compute(bars, inputs, hp) {
     const a = atr[i] || 0;
     const entry = C[i];
     let stop = dir > 0 ? L[i] - a * stopBufK : H[i] + a * stopBufK;
-    if (Math.abs(entry - stop) < a * 0.2) stop = entry - dir * a * 0.2;
+    if (Math.abs(entry - stop) < a * minStopK) stop = entry - dir * a * minStopK;
     stop = dir > 0 ? Math.floor(stop / tick + 1e-9) * tick : Math.ceil(stop / tick - 1e-9) * tick;
     const risk = Math.abs(entry - stop);
     const tg = [];
@@ -301,9 +303,14 @@ function compute(bars, inputs, hp) {
     tg.sort((p, q) => (dir > 0 ? p.x - q.x : q.x - p.x));
     const uniqT = [];
     for (const t of tg) if (!uniqT.length || Math.abs(t.x - uniqT[uniqT.length - 1].x) > a * 0.25) uniqT.push(t);
-    const t1 = uniqT[0] || { x: entry + dir * risk * 2, nm: '2R' };
-    const t2 = uniqT[1] || { x: entry + dir * Math.max(risk * 3, Math.abs(t1.x - entry) * 1.5), nm: '3R' };
-    const rr = Math.abs(t1.x - entry) / risk;
+    // room = distance to the next key level; TP1 = fixed R (partial), TP2 = next level
+    const nextLvl = uniqT[0] || { x: entry + dir * risk * 3, nm: '3R' };
+    const room = Math.abs(nextLvl.x - entry) / risk;
+    const t1 = { x: entry + dir * risk * tp1R, nm: tp1R + 'R' };
+    let t2 = nextLvl;
+    if (Math.abs(t2.x - entry) < risk * (tp1R + 0.5)) t2 = uniqT[1] && Math.abs(uniqT[1].x - entry) >= risk * (tp1R + 0.5) ? uniqT[1] : { x: entry + dir * risk * (tp1R + 1), nm: (tp1R + 1) + 'R' };
+    t1.x = dir > 0 ? Math.ceil(t1.x / tick - 1e-9) * tick : Math.floor(t1.x / tick + 1e-9) * tick;
+    const rr = room;
     const sc = scoreAt(i).score;
     const aligned = dir > 0 ? sc >= 1 : sc <= -1;
     const pv = POINT_VALUE[contract] || 2;
@@ -387,7 +394,7 @@ function compute(bars, inputs, hp) {
       plans.push(pl);
       if (dayKeyA[i] < firstSigDay) continue;
       const col = dir > 0 ? supCol : resCol;
-      const txt = (dir > 0 ? '▲ ' : '▼ ') + pl.grade + ' ' + pl.tag + ' ' + pl.lvl + ' ' + pl.rr.toFixed(1) + 'R';
+      const txt = (dir > 0 ? '▲ ' : '▼ ') + pl.grade + ' ' + pl.tag + ' ' + pl.lvl + ' room ' + pl.rr.toFixed(1) + 'R';
       markers.push({ x: i, y: dir > 0 ? L[i] : H[i], position: dir > 0 ? 'below' : 'above', color: col, text: txt, textColor: col });
     }
   }
@@ -400,7 +407,7 @@ function compute(bars, inputs, hp) {
   // Result of a finished plan in R: half off at TP1 (stop to entry), rest at TP2 / BE / expiry close
   const resultR = p => {
     let tp1 = false;
-    const r1 = p.rr, r2 = Math.abs(p.t2.x - p.entry) / p.risk;
+    const r1 = Math.abs(p.t1.x - p.entry) / p.risk, r2 = Math.abs(p.t2.x - p.entry) / p.risk;
     for (let j = p.i + 1; j <= last; j++) {
       if (j - p.i > planBars) { const rest = (C[j - 1] - p.entry) * p.dir / p.risk; return { r: tp1 ? 0.5 * r1 + 0.5 * Math.max(0, rest) : rest, tp1 }; }
       const sl = tp1 ? p.entry : p.stop;
@@ -492,8 +499,8 @@ function compute(bars, inputs, hp) {
     };
     row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + fmt(plan.entry, tick) + ' · ' + sizeTxt(plan));
     row(sl, resCol, 'solid', plan.status === 'tp1' ? 'SL → BE' : 'SL ' + fmt(sl, tick) + ' (-' + pts(sl) + ')');
-    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 ' + fmt(plan.t1.x, tick) + ' (' + plan.rr.toFixed(1) + 'R)');
-    row(plan.t2.x, supCol, 'dotted', 'TP2 ' + fmt(plan.t2.x, tick) + ' (' + (Math.abs(plan.t2.x - plan.entry) / plan.risk).toFixed(1) + 'R)');
+    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 ' + fmt(plan.t1.x, tick) + ' (' + (Math.abs(plan.t1.x - plan.entry) / plan.risk).toFixed(1) + 'R, half off)');
+    row(plan.t2.x, supCol, 'dotted', 'TP2 ' + (plan.t2.nm || '') + ' ' + fmt(plan.t2.x, tick) + ' (' + (Math.abs(plan.t2.x - plan.entry) / plan.risk).toFixed(1) + 'R)');
   }
 
   // ── Coach: ONE clear instruction ──
