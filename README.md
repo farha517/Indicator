@@ -8,7 +8,7 @@ Intraday futures indicator, in two versions:
 | `KeyLevels.pine` | TradingView Pine v6 |
 
 ## What it shows
-- **Levels:** PDH/PDL, PWH/PWL, PMH/PML, ATH, overnight high/low (ONH/ONL, 6pm ET → RTH open), opening range (ORH/ORL)
+- **Levels:** PDH/PDL, prior-day close (PDC) and 50% (PD50), VWAP (resets 6pm ET), PWH/PWL, PMH/PML, ATH, overnight high/low (ONH/ONL, 6pm ET → RTH open), opening range (ORH/ORL)
 - **Moving averages:** EMA 9, EMA 20, SMA 200
 - **Colors:** green = price above the level (support), red = price below (resistance).
   Line style = timeframe: day solid, week dashed, month dotted, ATH thick, ON/OR dotted grey.
@@ -16,7 +16,7 @@ Intraday futures indicator, in two versions:
   - `RT` = break & retest (old resistance holding as support, or the reverse)
   - `SW` = sweep: wick through the level, close back (stop run / failed breakout)
   - Below the bar = bullish, above = bearish. The text names the level, e.g. `SW PDH`.
-- **Bias label:** BULLISH / BEARISH / NEUTRAL score (−4…+4) from the EMA 9/20 stack, 200 SMA, prior-day range and opening range,
+- **Bias label:** BULLISH / BEARISH / NEUTRAL score (−5…+5) from the EMA 9/20 stack, 200 SMA, VWAP, prior-day range and opening range,
   plus "what to look for" right now and the nearest level above and below.
 
 ## Hyperprop setup
@@ -27,6 +27,8 @@ Intraday futures indicator, in two versions:
 4. If labels don't appear to the right of the last candle, set **Label offset** to 0.
 
 ## Trade plan & patience (built in)
+- **Strict confirmation** (default): the signal candle must close in the top 40% (long) / bottom 40% (short) of its range,
+  on volume at least 1.2x the 20-bar average. Works on 2m and 5m (all distances scale with ATR).
 - **A+ setups only** (default): a signal is shown only if it agrees with the bias score **and** TP1 is at least **1.5R** away.
   Marker text: `A+ SW PDL 2.1R` = grade, setup, level, reward:risk to TP1.
 - When an A+ setup fires, the chart draws **LONG/SHORT entry**, **SL** (just past the signal candle's wick) and **TP1/TP2** (the next key levels).

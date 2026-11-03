@@ -20,6 +20,10 @@ const showATH  = input.bool('All-Time High', true);
 const athManual = input.float('ATH price (0 = highest loaded bar)', 0, { min: 0 });
 const pmhManual = input.float('PMH manual (0 = auto)', 0, { min: 0 });
 const pmlManual = input.float('PML manual (0 = auto)', 0, { min: 0 });
+const showPDC  = input.bool('Prior Day Close (PDC)', true);
+const showPD50 = input.bool('Prior Day 50% (PD50)', true);
+const showVW   = input.bool('VWAP (resets 6pm ET)', true);
+const vwCol    = input.color('VWAP color', '#ffeb3b');
 const showON   = input.bool('Overnight H/L (ONH/ONL)', true);
 const showOR   = input.bool('Opening Range H/L (ORH/ORL)', true);
 const orMins   = input.int('Opening range minutes', 15, { min: 1, max: 120 });
@@ -57,6 +61,9 @@ const rtBars   = input.int('Retest window (bars)', 20, { min: 2, max: 500 });
 const tolK     = input.float('Touch tolerance (x ATR 14)', 0.25, { min: 0, max: 5, step: 0.05 });
 const sigDays  = input.int('Show signals from last N days', 3, { min: 1, max: 60 });
 const coolBars = input.int('Cooldown per level (bars)', 12, { min: 0, max: 500 });
+const strict   = input.bool('Strict confirmation (strong close + volume)', true);
+const closeK   = input.float('Close in top/bottom part of candle', 0.4, { min: 0.1, max: 0.5, step: 0.05 });
+const volK     = input.float('Volume vs 20-bar average (x)', 1.2, { min: 0, max: 5, step: 0.1 });
 const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min: 0, max: 5, step: 0.05 });
 
 // ── Trade plan ──
@@ -73,8 +80,9 @@ const debug    = input.bool('Debug info', false);
 
 // ════════════════════════════════════════════════════════════════════════════
 
-const NAMES = ['PDH', 'PDL', 'PWH', 'PWL', 'PMH', 'PML', 'ATH', 'ONH', 'ONL', 'ORH', 'ORL'];
-const TYPES = [0, 0, 1, 1, 2, 2, 3, 4, 4, 4, 4]; // 0 day, 1 week, 2 month, 3 ATH, 4 session
+const NAMES = ['PDH', 'PDL', 'PWH', 'PWL', 'PMH', 'PML', 'ATH', 'ONH', 'ONL', 'ORH', 'ORL', 'PDC', 'PD50', 'VWAP'];
+const TYPES = [0, 0, 1, 1, 2, 2, 3, 4, 4, 4, 4, 0, 0, 5]; // 0 day, 1 week, 2 month, 3 ATH, 4 session, 5 VWAP
+const VW = 13;   // VWAP moves every bar (dynamic level)
 const DAY = 86400000;
 
 function on(v) { return v === true || v === 'On'; }
@@ -112,6 +120,10 @@ function compute(bars, inputs, hp) {
   const tms = bars.map(b => toMs(b.time != null ? b.time : b.t));
   const timeOk = isFinite(tms[n - 1]) && isFinite(tms[0]);
   const H = bars.map(b => b.h), L = bars.map(b => b.l), C = bars.map(b => b.c), O = bars.map(b => b.o);
+  const V = bars.map(b => (isFinite(b.v) ? +b.v : 0));
+  const hasVol = V.some(v => v > 0);
+  const avgVol = new Array(n).fill(NaN);              // average of the previous 20 bars
+  { let sum = 0; for (let i = 0; i < n; i++) { if (i >= 20) { avgVol[i] = sum / 20; sum -= V[i - 20]; } sum += V[i]; } }
 
   // Tick size estimate (smallest non-zero price step in recent closes)
   let tick = Infinity;
@@ -153,6 +165,9 @@ function compute(bars, inputs, hp) {
   let curWH = -Infinity, curWL = Infinity, prevWH = NaN, prevWL = NaN;
   let curMH = -Infinity, curML = Infinity, prevMH = NaN, prevML = NaN;
   let rthH = -Infinity, rthL = Infinity, prevRthH = NaN, prevRthL = NaN, wasRTH = false;
+  let prevDC = NaN, rthLastC = NaN, prevRthC = NaN, vwPV = 0, vwV = 0, vwBars = 0;
+  const vwap = new Array(n).fill(null);
+  const vwBarsA = new Array(n).fill(0);
   let onH = NaN, onL = NaN, orH = NaN, orL = NaN;
   let maxBeforeToday = -Infinity, maxToday = -Infinity;
   const dayRanges = [];
@@ -171,13 +186,17 @@ function compute(bars, inputs, hp) {
 
     if (dk !== dKey) {
       if (dKey !== null) {
-        prevDH = curDH; prevDL = curDL;
+        prevDH = curDH; prevDL = curDL; prevDC = C[i - 1];
         if (dCount >= 1) dayRanges.push(curDH - curDL);
         maxBeforeToday = Math.max(maxBeforeToday, maxToday);
       }
       dKey = dk; dCount++; curDH = -Infinity; curDL = Infinity; maxToday = -Infinity;
       onH = NaN; onL = NaN; orH = NaN; orL = NaN;
+      vwPV = 0; vwV = 0; vwBars = 0;
     }
+    // VWAP (typical price; equal weight if the feed has no volume)
+    { const w = hasVol ? V[i] : 1; vwPV += (H[i] + L[i] + C[i]) / 3 * w; vwV += w; vwBars++;
+      vwap[i] = vwV > 0 ? vwPV / vwV : null; vwBarsA[i] = vwBars; }
     if (wk !== wKey) { if (wKey !== null) { prevWH = curWH; prevWL = curWL; } wKey = wk; wCount++; curWH = -Infinity; curWL = Infinity; }
     if (mk !== mKey) { if (mKey !== null) { prevMH = curMH; prevML = curML; } mKey = mk; mCount++; curMH = -Infinity; curML = Infinity; }
 
@@ -187,7 +206,8 @@ function compute(bars, inputs, hp) {
     const inOR = intraday && minOfDay >= rthO && minOfDay < orEnd;
     if (inRTH && !wasRTH) { rthH = H[i]; rthL = L[i]; }
     else if (inRTH) { rthH = Math.max(rthH, H[i]); rthL = Math.min(rthL, L[i]); }
-    if (!inRTH && wasRTH) { prevRthH = rthH; prevRthL = rthL; }
+    if (!inRTH && wasRTH) { prevRthH = rthH; prevRthL = rthL; prevRthC = rthLastC; }
+    if (inRTH) rthLastC = C[i];
     wasRTH = inRTH;
     if (inON) { onH = isNaN(onH) ? H[i] : Math.max(onH, H[i]); onL = isNaN(onL) ? L[i] : Math.min(onL, L[i]); }
     if (inOR) { orH = isNaN(orH) ? H[i] : Math.max(orH, H[i]); orL = isNaN(orL) ? L[i] : Math.min(orL, L[i]); }
@@ -209,6 +229,10 @@ function compute(bars, inputs, hp) {
     lv[8][i] = on(showON) && intraday && dCount >= 2 ? onL : NaN;
     lv[9][i] = on(showOR) && inRTH ? orH : NaN;
     lv[10][i] = on(showOR) && inRTH ? orL : NaN;
+    const pdc = pdSrc === 'RTH only' ? prevRthC : prevDC;
+    lv[11][i] = on(showPDC) && dCount >= 3 ? pdc : NaN;
+    lv[12][i] = on(showPD50) && dCount >= 3 && !isNaN(pdh) && !isNaN(pdl) ? (pdh + pdl) / 2 : NaN;
+    lv[VW][i] = on(showVW) && intraday && vwap[i] != null ? vwap[i] : NaN;
 
     curDH = Math.max(curDH, H[i]); curDL = Math.min(curDL, L[i]);
     curWH = Math.max(curWH, H[i]); curWL = Math.min(curWL, L[i]);
@@ -226,10 +250,11 @@ function compute(bars, inputs, hp) {
   function eligible(k, i) {
     if (k === 7 || k === 8) return !inONa[i];
     if (k === 9 || k === 10) return orDoneA[i];
+    if (k === VW) return vwBarsA[i] >= 6;
     return true;
   }
 
-  // ── Moving averages + per-bar bias score (−4…+4) ──
+  // ── Moving averages + per-bar bias score (−5…+5) ──
   const e9 = hp.ema(C, 9), e20 = hp.ema(C, 20), s200 = hp.sma(C, 200);
   const num = v => (v == null || isNaN(v) ? NaN : v);
   const scoreAt = i => {
@@ -240,7 +265,9 @@ function compute(bars, inputs, hp) {
     const pdS = isNaN(ph) || isNaN(pl) ? 0 : c > ph ? 1 : c < pl ? -1 : 0;
     const oh = lv[9][i], ol = lv[10][i];
     const orS = orDoneA[i] && !isNaN(oh) ? (c > oh ? 1 : c < ol ? -1 : 0) : 0;
-    return { score: emaS + smaS + pdS + orS, pdS };
+    const vw = vwap[i];
+    const vwS = vw == null || vwBarsA[i] < 6 ? 0 : c > vw ? 1 : c < vw ? -1 : 0;
+    return { score: emaS + smaS + pdS + orS + vwS, pdS };
   };
 
   // Build a trade plan for a signal: stop past the wick, targets = next levels
@@ -269,6 +296,17 @@ function compute(bars, inputs, hp) {
     return { i, dir, entry, stop, t1, t2, rr, grade };
   };
 
+  // Strict confirmation: candle closes strong in the signal direction, on above-average volume
+  const confirm = (i, dir) => {
+    if (!on(strict)) return true;
+    const rng = H[i] - L[i];
+    if (rng <= 0) return false;
+    const pos = (C[i] - L[i]) / rng;                  // 0 = closed at low, 1 = closed at high
+    const strong = dir > 0 ? pos >= 1 - closeK : pos <= closeK;
+    const volOk = !hasVol || volK <= 0 || isNaN(avgVol[i]) || V[i] >= avgVol[i] * volK;
+    return strong && volOk;
+  };
+
   // ── Signals ──
   const markers = [];
   let plan = null;
@@ -282,20 +320,22 @@ function compute(bars, inputs, hp) {
     for (let k = 0; k < NAMES.length; k++) {
       const x = lv[k][i];
       if (isNaN(x) || !eligible(k, i)) { state[k] = 0; lastLv[k] = x; continue; }
-      if (x !== lastLv[k]) { state[k] = 0; lastLv[k] = x; }
+      if (x !== lastLv[k] && k !== VW) { state[k] = 0; }
+      lastLv[k] = x;
+      const xp = k === VW && !isNaN(lv[k][i - 1]) ? lv[k][i - 1] : x;   // level on the previous bar
       const nm = nameOf(k);
       const ready = i - lastSig[k] > coolBars;      // one signal per level per cooldown
       const fire = (arr, arrNm, tag) => { if (ready) { arr.push(tag); arrNm.push(nm); lastSig[k] = i; } };
-      const up = C[i] > x && C[i - 1] <= x, dn = C[i] < x && C[i - 1] >= x;
+      const up = C[i] > x && C[i - 1] <= xp, dn = C[i] < x && C[i - 1] >= xp;
       if (up) { state[k] = 1; stBar[k] = i; if (on(showBRK)) fire(bull, bullNm, 'BRK'); }
       else if (dn) { state[k] = -1; stBar[k] = i; if (on(showBRK)) fire(bear, bearNm, 'BRK'); }
       else if (state[k] !== 0 && i - stBar[k] > rtBars) state[k] = 0;
-      else if (state[k] === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x) { state[k] = 0; if (on(showRT)) fire(bull, bullNm, 'RT'); }
-      else if (state[k] === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x) { state[k] = 0; if (on(showRT)) fire(bear, bearNm, 'RT'); }
+      else if (state[k] === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x && confirm(i, 1)) { state[k] = 0; if (on(showRT)) fire(bull, bullNm, 'RT'); }
+      else if (state[k] === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x && confirm(i, -1)) { state[k] = 0; if (on(showRT)) fire(bear, bearNm, 'RT'); }
       if (on(showSW)) {
         const minWick = (atr[i] || 0) * swMinK;
-        if (H[i] - x >= minWick && H[i] > x && C[i] < x && O[i] < x && C[i - 1] < x) fire(bear, bearNm, 'SW');
-        if (x - L[i] >= minWick && L[i] < x && C[i] > x && O[i] > x && C[i - 1] > x) fire(bull, bullNm, 'SW');
+        if (H[i] - x >= minWick && H[i] > x && C[i] < x && O[i] < x && C[i - 1] < xp && confirm(i, -1)) fire(bear, bearNm, 'SW');
+        if (x - L[i] >= minWick && L[i] < x && C[i] > x && O[i] > x && C[i - 1] > xp && confirm(i, 1)) fire(bull, bullNm, 'SW');
       }
     }
     if (dayKeyA[i] < firstSigDay) continue;
@@ -336,7 +376,7 @@ function compute(bars, inputs, hp) {
   }
   vis.sort((a, b) => b.x - a.x);
   const x1 = Math.max(0, last - lineLen), x2 = last + rOffset;
-  const typeCol = t => [dCol, wCol, mCol, athCol, sCol][t];
+  const typeCol = t => [dCol, wCol, mCol, athCol, sCol, vwCol][t];
   const typeStyle = t => (t === 1 ? 'dashed' : t === 2 || t === 4 ? 'dotted' : 'solid');
   const colOf = v => (colorMode === 'Support/Resistance' ? (px >= v.x ? supCol : resCol) : typeCol(TYPES[v.k]));
 
@@ -348,7 +388,7 @@ function compute(bars, inputs, hp) {
   };
   for (const v of vis) {
     const t = TYPES[v.k];
-    lines.push({ x1, y1: v.x, x2, y2: v.x, color: colOf(v), width: t === 3 ? 2 : 1, style: typeStyle(t) });
+    if (v.k !== VW) lines.push({ x1, y1: v.x, x2, y2: v.x, color: colOf(v), width: t === 3 ? 2 : 1, style: v.k === 12 ? 'dotted' : v.k === 11 ? 'dashed' : typeStyle(t) });
     if (group && Math.abs(group.y - v.x) <= mergeTol) group.names.push(nameOf(v.k));
     else { flush(); group = { y: v.x, names: [nameOf(v.k)], color: colOf(v) }; }
   }
@@ -359,6 +399,7 @@ function compute(bars, inputs, hp) {
   if (on(showE9)) plots.push({ title: 'EMA 9', values: e9, color: e9Col, width: 1 });
   if (on(showE20)) plots.push({ title: 'EMA 20', values: e20, color: e20Col, width: 1 });
   if (on(showS200)) plots.push({ title: 'SMA 200', values: s200, color: s200Col, width: 2 });
+  if (on(showVW) && intraday) plots.push({ title: 'VWAP', values: vwap.map((v, i) => (vwBarsA[i] <= 1 ? null : v)), color: vwCol, width: 2 });
 
   // ── Trade plan lines (latest open A+ setup) ──
   if (on(showPlan) && plan) {
