@@ -50,9 +50,11 @@ The stats line scores every setup separately on the history your chart has loade
 | `SIM LONG PB ▸ …` | Same, but the setup is still in test — practice account only |
 | `MISSED ▸ don't chase` | Price left the zone. Let it go |
 | `MANAGE ▸ SL … · TP … · hands off` | In a trade. Let the stop or target do the work |
-| `DONE FOR TODAY ▸ 3 trades taken` / `2 losses` | Stop until the next session (6pm ET) |
+| `SIT OUT ▸ 2 signals lost this session (choppy)` | The setups are failing in this market. Stop until the next session |
 
-- One trade at a time, max 3 trades and 2 losses per trading day (day resets 6pm ET).
+- One trade at a time, max 3 signals per session; after 2 losing signals in a session it says SIT OUT.
+  Sessions: NY 9:30am–4pm and evening 6pm–midnight, counted separately.
+  **It counts its own signals — it can't see your account.** Keep your own count too: stop after 2 real losses.
 - One take profit at 1.5R, full exit. Stop just past the recent wick.
 - Size = $75 ÷ (stop points × $ per point), capped at 5 contracts.
 

@@ -85,8 +85,8 @@ const planBars = input.int('Max bars in a trade', 48, { min: 5, max: 500 });
 const riskUsd  = input.float('Risk per trade ($)', 75, { min: 5, max: 10000, step: 5 });
 const contract = input.select('Contract', 'MNQ', ['MNQ', 'NQ', 'MES', 'ES', 'M2K', 'RTY', 'MYM', 'YM', 'MGC', 'GC', 'MCL', 'CL']);
 const maxQty   = input.int('Max contracts', 5, { min: 1, max: 100 });
-const maxTrades = input.int('Daily cap: trades', 3, { min: 1, max: 20 });
-const maxLoss  = input.int('Daily stop: losses', 2, { min: 1, max: 10 });
+const maxTrades = input.int('Max signals per session', 3, { min: 1, max: 20 });
+const maxLoss  = input.int('Sit out after N losing signals in a session', 2, { min: 1, max: 10 });
 const entryBars = input.int('Entry valid for (bars after signal)', 3, { min: 1, max: 20 });
 const zoneR    = input.float('Entry zone (x risk past entry)', 0.3, { min: 0.05, max: 1, step: 0.05 });
 
@@ -434,14 +434,17 @@ function compute(bars, inputs, hp) {
 
   // ── Pick the trades you would actually take: your hours, LIVE/TEST setups, caps ──
   const plans = [];
-  const tradesOn = day => plans.filter(p => dayKeyA[p.i] === day).length;
-  const lossesOn = (day, upto) => plans.filter(p => dayKeyA[p.i] === day && resolve(p, upto) === 'loss').length;
+  // Counted per session (NY hours and evening separately) — these are the indicator's own signals,
+  // it cannot see your account. Losing signals in a session = choppy market → sit the session out.
+  const sesKey = i => dayKeyA[i] * 10 + (sessionOf(i) === 'ny' ? 1 : sessionOf(i) === 'eve' ? 2 : 3);
+  const tradesOn = key => plans.filter(p => sesKey(p.i) === key).length;
+  const lossesOn = (key, upto) => plans.filter(p => sesKey(p.i) === key && resolve(p, upto) === 'loss').length;
   const blockedAt = i => {
     if (!allowed(i)) return 'hours';
     const prev = plans[plans.length - 1];
     if (prev && resolve(prev, i) === 'open') return 'open';
-    if (lossesOn(dayKeyA[i], i) >= maxLoss) return 'losses';
-    if (tradesOn(dayKeyA[i]) >= maxTrades) return 'trades';
+    if (lossesOn(sesKey(i), i) >= maxLoss) return 'losses';
+    if (tradesOn(sesKey(i)) >= maxTrades) return 'trades';
     return '';
   };
   let forming = null;
@@ -466,8 +469,9 @@ function compute(bars, inputs, hp) {
 
   let plan = plans[plans.length - 1] || null;
   if (plan) { plan.state = resolve(plan, last); if (plan.state !== 'open') plan = null; }
-  const lossesToday = lossesOn(dayKeyA[last], last);
-  const tradesToday = tradesOn(dayKeyA[last]);
+  const lossesToday = lossesOn(sesKey(last), last);
+  const tradesToday = tradesOn(sesKey(last));
+  const nextSes = sessionOf(last) === 'ny' ? '6pm' : '9:30am';
 
   // ── Level lines + merged labels (current values only) ──
   const lines = [], labels = [];
@@ -581,8 +585,8 @@ function compute(bars, inputs, hp) {
       else if (age <= entryBars) { text = 'MISSED ▸ don\'t chase'; col = GREY; }
       else { text = 'MANAGE ▸ SL ' + fmt(plan.stop, tick) + ' · TP ' + fmt(plan.t1.x, tick) + ' · hands off'; col = GREY; }
     }
-    else if (lossesToday >= maxLoss) { text = 'DONE FOR TODAY ▸ ' + lossesToday + ' losses. Close the chart.'; col = resCol; }
-    else if (tradesToday >= maxTrades) { text = 'DONE FOR TODAY ▸ ' + tradesToday + ' trades taken.'; col = resCol; }
+    else if (allowed(last) && lossesToday >= maxLoss) { text = 'SIT OUT ▸ ' + lossesToday + ' signals lost this session (choppy). Back at ' + nextSes; col = resCol; }
+    else if (allowed(last) && tradesToday >= maxTrades) { text = 'SIT OUT ▸ ' + tradesToday + ' signals this session already. Back at ' + nextSes; col = resCol; }
     else if (!allowed(last)) { text = 'WAIT ▸ outside your hours'; col = GREY; }
     else if (forming) { text = 'FORMING ' + forming.setup + ' ' + (forming.dir > 0 ? 'long' : 'short') + ' ▸ wait for close' + countdown; col = AMBER; }
     else if (atLvl) { text = 'WAIT ▸ at ' + nameOf(atLvl.k) + ' · ' + trTxt; col = GREY; }
