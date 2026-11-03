@@ -12,26 +12,26 @@
 // levels, or type them in the manual fields below.
 
 // ── Levels ──
-const showPD   = input.select('Prior Day H/L (PDH/PDL)', 'On', ['On', 'Off']);
+const showPD   = input.bool('Prior Day H/L (PDH/PDL)', true);
 const pdSrc    = input.select('Prior day based on', 'Full session', ['Full session', 'RTH only']);
-const showPW   = input.select('Prior Week H/L (PWH/PWL)', 'On', ['On', 'Off']);
-const showPM   = input.select('Prior Month H/L (PMH/PML)', 'On', ['On', 'Off']);
-const showATH  = input.select('All-Time High', 'On', ['On', 'Off']);
+const showPW   = input.bool('Prior Week H/L (PWH/PWL)', true);
+const showPM   = input.bool('Prior Month H/L (PMH/PML)', true);
+const showATH  = input.bool('All-Time High', true);
 const athManual = input.float('ATH price (0 = highest loaded bar)', 0, { min: 0 });
 const pmhManual = input.float('PMH manual (0 = auto)', 0, { min: 0 });
 const pmlManual = input.float('PML manual (0 = auto)', 0, { min: 0 });
-const showON   = input.select('Overnight H/L (ONH/ONL)', 'On', ['On', 'Off']);
-const showOR   = input.select('Opening Range H/L (ORH/ORL)', 'On', ['On', 'Off']);
+const showON   = input.bool('Overnight H/L (ONH/ONL)', true);
+const showOR   = input.bool('Opening Range H/L (ORH/ORL)', true);
 const orMins   = input.int('Opening range minutes', 15, { min: 1, max: 120 });
 const rthOpen  = input.select('RTH open (NY time)', '09:30', ['09:30', '08:30', '09:00', '10:00']);
 const rthClose = input.select('RTH close (NY time)', '16:00', ['16:00', '16:15', '15:00', '17:00']);
 
 // ── Moving averages ──
-const showE9   = input.select('EMA 9', 'On', ['On', 'Off']);
+const showE9   = input.bool('EMA 9', true);
 const e9Col    = input.color('EMA 9 color', '#00bcd4');
-const showE20  = input.select('EMA 20', 'On', ['On', 'Off']);
+const showE20  = input.bool('EMA 20', true);
 const e20Col   = input.color('EMA 20 color', '#ff9800');
-const showS200 = input.select('SMA 200', 'On', ['On', 'Off']);
+const showS200 = input.bool('SMA 200', true);
 const s200Col  = input.color('SMA 200 color', '#e91e63');
 
 // ── Style ──
@@ -45,14 +45,14 @@ const athCol   = input.color('ATH color', '#ffd600');
 const sCol     = input.color('ON/OR color', '#90a4ae');
 const lineLen  = input.int('Line length (bars back)', 40, { min: 5, max: 500 });
 const rOffset  = input.int('Label offset (bars right)', 4, { min: 0, max: 50 });
-const showPx   = input.select('Prices on labels', 'On', ['On', 'Off']);
+const showPx   = input.bool('Prices on labels', true);
 const mergeK   = input.float('Merge labels closer than (x daily ATR)', 0.04, { min: 0, max: 1, step: 0.01 });
 const maxDistK = input.float('Hide levels farther than (x daily ATR, 0 = off)', 0, { min: 0, max: 50, step: 0.5 });
 
 // ── Signals ──
-const showRT   = input.select('Break & retest markers (RT)', 'On', ['On', 'Off']);
-const showSW   = input.select('Sweep markers (SW)', 'On', ['On', 'Off']);
-const showBRK  = input.select('Break markers (BRK)', 'Off', ['On', 'Off']);
+const showRT   = input.bool('Break & retest markers (RT)', true);
+const showSW   = input.bool('Sweep markers (SW)', true);
+const showBRK  = input.bool('Break markers (BRK)', false);
 const rtBars   = input.int('Retest window (bars)', 20, { min: 2, max: 500 });
 const tolK     = input.float('Touch tolerance (x ATR 14)', 0.25, { min: 0, max: 5, step: 0.05 });
 const sigDays  = input.int('Show signals from last N days', 3, { min: 1, max: 60 });
@@ -60,7 +60,7 @@ const coolBars = input.int('Cooldown per level (bars)', 12, { min: 0, max: 500 }
 const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min: 0, max: 5, step: 0.05 });
 
 // ── Bias label ──
-const showInfo = input.select('Bias / what-to-look-for label', 'On', ['On', 'Off']);
+const showInfo = input.bool('Bias / what-to-look-for label', true);
 const nearK    = input.float("'At a level' distance (x ATR 14)", 1, { min: 0, max: 10, step: 0.25 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -69,7 +69,7 @@ const NAMES = ['PDH', 'PDL', 'PWH', 'PWL', 'PMH', 'PML', 'ATH', 'ONH', 'ONL', 'O
 const TYPES = [0, 0, 1, 1, 2, 2, 3, 4, 4, 4, 4]; // 0 day, 1 week, 2 month, 3 ATH, 4 session
 const DAY = 86400000;
 
-function on(v) { return v === 'On'; }
+function on(v) { return v === true || v === 'On'; }
 function hhmm(s) { const p = String(s).split(':'); return (+p[0]) * 60 + (+p[1]); }
 function fmt(p, tick) {
   if (p == null || !isFinite(p)) return '';
