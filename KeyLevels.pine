@@ -1,0 +1,418 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+//  Key Levels + EMAs  —  built for intraday futures (ES / NQ / YM / RTY / CL / GC)
+//  PDH/PDL · PWH/PWL · PMH/PML · ATH · Overnight H/L · Opening Range H/L
+//  EMA 9 · EMA 20 · SMA 200 · Bias table · Break & retest · Sweeps
+//  Clean by design: lines only for the current period, labels merge when close,
+//  and the "what to look for" playbook lives in tap/hover tooltips.
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("Key Levels + EMAs [Futures]", shorttitle = "KeyLvls", overlay = true, max_lines_count = 50, max_labels_count = 500)
+
+// ═════════════════════════ INPUTS ═════════════════════════
+const string G_LV = "Levels"
+showPD   = input.bool(true, "Prior Day High / Low (PDH / PDL)", group = G_LV)
+pdSrc    = input.string("Full session (Globex)", "   Prior day based on", options = ["Full session (Globex)", "RTH only"], group = G_LV)
+showPW   = input.bool(true, "Prior Week High / Low (PWH / PWL)", group = G_LV)
+showPM   = input.bool(true, "Prior Month High / Low (PMH / PML)", group = G_LV)
+showATH  = input.bool(true, "All-Time High (ATH)", group = G_LV)
+athSym   = input.string("", "   ATH symbol (blank = chart, e.g. CME_MINI:ES1!)", group = G_LV, tooltip = "Single contracts (ESZ2026) only have a few months of history. Enter the continuous contract (CME_MINI:ES1!, CME_MINI:NQ1!) so the ATH comes from the full history.")
+showON   = input.bool(true, "Overnight / Premarket High / Low (ONH / ONL)", group = G_LV)
+showOR   = input.bool(true, "Opening Range High / Low (ORH / ORL)", group = G_LV)
+orMins   = input.int(15, "   Opening range minutes", options = [5, 15, 30, 60], group = G_LV)
+rthSess  = input.session("0930-1600", "RTH session (New York time)", group = G_LV)
+
+const string G_MA = "Moving averages"
+showE9   = input.bool(true, "EMA 9", inline = "e9", group = G_MA)
+e9Col    = input.color(#00bcd4, "", inline = "e9", group = G_MA)
+showE20  = input.bool(true, "EMA 20", inline = "e20", group = G_MA)
+e20Col   = input.color(#ff9800, "", inline = "e20", group = G_MA)
+showS200 = input.bool(true, "SMA 200", inline = "s200", group = G_MA)
+s200Col  = input.color(#e91e63, "", inline = "s200", group = G_MA)
+
+const string G_ST = "Style (mobile friendly)"
+colorMode = input.string("Role (support / resistance)", "Level colors", options = ["Role (support / resistance)", "Level type"], group = G_ST, tooltip = "Role: green = price is above the level (support), red = price is below it (resistance).\nLevel type: one color per timeframe.\nLine style always shows the type: daily solid, weekly dashed, monthly dotted, ATH thick, session (ON/OR) dotted grey.")
+supCol   = input.color(#26a69a, "Support", inline = "role", group = G_ST)
+resCol   = input.color(#ef5350, "Resistance", inline = "role", group = G_ST)
+dCol     = input.color(#42a5f5, "Day", inline = "typ", group = G_ST)
+wCol     = input.color(#ab47bc, "Week", inline = "typ", group = G_ST)
+mCol     = input.color(#ffa726, "Month", inline = "typ", group = G_ST)
+athCol   = input.color(#ffd600, "ATH", inline = "typ", group = G_ST)
+sCol     = input.color(#90a4ae, "ON/OR", inline = "typ", group = G_ST)
+lineLen  = input.int(40, "Line length (bars back)", minval = 5, maxval = 400, group = G_ST)
+rOffset  = input.int(6, "Label offset (bars right)", minval = 1, maxval = 50, group = G_ST)
+lblSzStr = input.string("small", "Label size", options = ["tiny", "small", "normal"], group = G_ST)
+showPx   = input.bool(true, "Show prices on labels", group = G_ST)
+mergeK   = input.float(0.04, "Merge labels closer than (x daily ATR)", minval = 0, step = 0.01, group = G_ST, tooltip = "Levels this close together share one label (e.g. 'PDH · ONH'). Raise it if labels overlap on your phone.")
+maxDistK = input.float(0, "Hide levels farther than (x daily ATR, 0 = off)", minval = 0, step = 0.5, group = G_ST, tooltip = "Hides far-away levels (e.g. ATH or monthly levels) to keep the chart clean. The table still shows the nearest levels.")
+
+const string G_SG = "Signals"
+showRT   = input.bool(true, "Break & retest markers (RT)", group = G_SG)
+showSW   = input.bool(true, "Sweep / rejection markers (SW)", group = G_SG)
+showBRK  = input.bool(false, "Break markers (BRK)", group = G_SG)
+rtBars   = input.int(20, "Retest window (bars after break)", minval = 2, group = G_SG)
+tolK     = input.float(0.25, "Touch tolerance (x ATR 14)", minval = 0, step = 0.05, group = G_SG)
+sigDays  = input.int(3, "Show signals from last N days", minval = 1, maxval = 60, group = G_SG)
+useAlert = input.bool(true, "Fire alerts on signals", group = G_SG, tooltip = "Create an alert on this indicator and choose 'Any alert() function call'.")
+
+const string G_TB = "Table"
+showTbl  = input.bool(true, "Show table", group = G_TB)
+tblMode  = input.string("Full", "Content", options = ["Full", "Bias only"], group = G_TB)
+tblPos   = input.string("Top right", "Position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G_TB)
+tblSzStr = input.string("small", "Text size", options = ["tiny", "small", "normal"], group = G_TB)
+nearK    = input.float(1.0, "'At a level' distance (x ATR 14)", minval = 0, step = 0.25, group = G_TB)
+
+// ═════════════════════════ HELPERS ═════════════════════════
+const string NY = "America/New_York"
+
+toSize(string s) =>
+    s == "tiny" ? size.tiny : s == "normal" ? size.normal : size.small
+
+fmt(float p) =>
+    str.tostring(p, format.mintick)
+
+addTo(string s, string n) =>
+    s == "" ? n : s + ", " + n
+
+// level index → type: 0 day, 1 week, 2 month, 3 ATH, 4 session
+typeOf(int i) =>
+    i <= 1 ? 0 : i <= 3 ? 1 : i <= 5 ? 2 : i == 6 ? 3 : 4
+
+typeColor(int t) =>
+    t == 0 ? dCol : t == 1 ? wCol : t == 2 ? mCol : t == 3 ? athCol : sCol
+
+typeStyle(int t) =>
+    t == 1 ? line.style_dashed : t == 2 or t == 4 ? line.style_dotted : line.style_solid
+
+// "What to look for" playbook shown in each label's tooltip
+playbook(int i, string nm, bool priceAbove) =>
+    string what = switch i
+        0 => "PDH – Prior Day High"
+        1 => "PDL – Prior Day Low"
+        2 => "PWH – Prior Week High"
+        3 => "PWL – Prior Week Low"
+        4 => "PMH – Prior Month High"
+        5 => "PML – Prior Month Low"
+        6 => "ATH – All-Time High"
+        7 => "ONH – Overnight / Premarket High"
+        8 => "ONL – Overnight / Premarket Low"
+        9 => "ORH – Opening Range High"
+        => "ORL – Opening Range Low"
+    string ctx = i <= 1 ? "Most-watched intraday levels. Inside the prior-day range = rotation (fade the edges). Acceptance outside = trend-day potential." : i <= 5 ? "Higher-timeframe level: expect a bigger reaction. Good place for targets / partials." : i == 6 ? "No overhead supply above. Breakouts can run (price discovery). A failed break back below ATH often reverses hard." : i <= 8 ? "Overnight extremes are often tested in the first hour of RTH. A sweep of ONH/ONL at the open is a common reversal spot." : "The OR break often sets the day's direction. A failed OR break frequently runs to the other side of the range."
+    string role = priceAbove ? "Price is ABOVE → acting as SUPPORT.\n▲ Bullish: pullback holds / retest (RT) → long, stop below.\n▼ Bearish: close back below = failed breakout → short toward next level down." : "Price is BELOW → acting as RESISTANCE.\n▼ Bearish: rejection or wick through and close back below (SW) → short, stop above.\n▲ Bullish: break, close and hold above, then retest (RT) → long."
+    what + "\n" + ctx + "\n\n" + role
+
+// ═════════════════════════ CORE DATA ═════════════════════════
+isIntra = timeframe.isintraday
+atr     = ta.atr(14)
+tol     = atr * tolK
+
+e9   = ta.ema(close, 9)
+e20  = ta.ema(close, 20)
+s200 = ta.sma(close, 200)
+
+// Higher-timeframe levels (non-repainting: completed prior bars only).
+// On CME futures the daily bar follows the exchange session (6pm–5pm ET).
+[pdhG, pdlG, dAtr] = request.security(syminfo.tickerid, "D", [high[1], low[1], ta.atr(14)[1]], lookahead = barmerge.lookahead_on)
+[pwh, pwl]         = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pmh, pml]         = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+
+// ATH as of the prior session: monthly history (deep) + daily history (recent)
+athTicker = athSym == "" ? syminfo.tickerid : athSym
+athM = request.security(athTicker, "M", ta.max(high)[1], lookahead = barmerge.lookahead_on)
+athD = request.security(athTicker, "D", ta.max(high)[1], lookahead = barmerge.lookahead_on)
+athRef = na(athM) and na(athD) ? na : math.max(nz(athM), nz(athD))
+
+// Session windows (New York time)
+rthStartStr = str.substring(rthSess, 0, 4)
+rthStartMin = int(str.tonumber(str.substring(rthSess, 0, 2))) * 60 + int(str.tonumber(str.substring(rthSess, 2, 4)))
+orEndMin    = rthStartMin + orMins
+orSess      = rthStartStr + "-" + str.tostring(math.floor(orEndMin / 60), "00") + str.tostring(orEndMin % 60, "00")
+onSess      = "1800-" + rthStartStr
+
+inRTH = isIntra and not na(time(timeframe.period, rthSess, NY))
+inON  = isIntra and not na(time(timeframe.period, onSess, NY))
+inOR  = isIntra and not na(time(timeframe.period, orSess, NY))
+
+// RTH high/low (for "RTH only" prior day)
+var float rthH = na
+var float rthL = na
+var float prevRthH = na
+var float prevRthL = na
+if inRTH and not inRTH[1]
+    rthH := high
+    rthL := low
+else if inRTH
+    rthH := math.max(rthH, high)
+    rthL := math.min(rthL, low)
+if not inRTH and inRTH[1]
+    prevRthH := rthH
+    prevRthL := rthL
+
+pdh = pdSrc == "RTH only" ? prevRthH : pdhG
+pdl = pdSrc == "RTH only" ? prevRthL : pdlG
+
+// Overnight (Globex) high/low: 6pm ET → RTH open, frozen during RTH
+var float onH = na
+var float onL = na
+if inON and not inON[1]
+    onH := high
+    onL := low
+else if inON
+    onH := math.max(onH, high)
+    onL := math.min(onL, low)
+
+// Opening range
+var float orH = na
+var float orL = na
+if inOR and not inOR[1]
+    orH := high
+    orL := low
+else if inOR
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+orDone = inRTH and not inOR and not na(orH)
+
+// ═════════════════════════ LEVEL TABLE ═════════════════════════
+const int N = 11
+var string[] NAMES = array.from("PDH", "PDL", "PWH", "PWL", "PMH", "PML", "ATH", "ONH", "ONL", "ORH", "ORL")
+
+float[] lv = array.from(pdh, pdl, pwh, pwl, pmh, pml, athRef, onH, onL, orH, orL)
+// shown on chart
+bool[] en  = array.from(showPD, showPD, showPW, showPW, showPM, showPM, showATH, showON and isIntra, showON and isIntra, showOR and inRTH, showOR and inRTH)
+// eligible for signals (levels must be final, not still forming)
+bool[] sg  = array.from(showPD, showPD, showPW, showPW, showPM, showPM, showATH, showON and isIntra and not inON, showON and isIntra and not inON, showOR and orDone, showOR and orDone)
+
+// ═════════════════════════ SIGNALS ═════════════════════════
+var float[] lastLv = array.new_float(N, na)
+var int[]   st     = array.new_int(N, 0)     // 1 = broke up (await retest), -1 = broke down
+var int[]   stBar  = array.new_int(N, 0)
+
+string bullRT = ""
+string bearRT = ""
+string bullSW = ""
+string bearSW = ""
+string brkUp  = ""
+string brkDn  = ""
+
+if barstate.isconfirmed
+    for i = 0 to N - 1
+        float L = lv.get(i)
+        if na(L) or not sg.get(i)
+            st.set(i, 0)
+            lastLv.set(i, L)
+            continue
+        if L != lastLv.get(i)
+            st.set(i, 0)
+            lastLv.set(i, L)
+        string nm = NAMES.get(i)
+        bool crossUp = close > L and close[1] <= L
+        bool crossDn = close < L and close[1] >= L
+        if crossUp
+            st.set(i, 1)
+            stBar.set(i, bar_index)
+            brkUp := addTo(brkUp, nm)
+        else if crossDn
+            st.set(i, -1)
+            stBar.set(i, bar_index)
+            brkDn := addTo(brkDn, nm)
+        else
+            int s   = st.get(i)
+            int age = bar_index - stBar.get(i)
+            if s != 0 and age > rtBars
+                st.set(i, 0)
+            else if s == 1 and low <= L + tol and close > L
+                bullRT := addTo(bullRT, nm)
+                st.set(i, 0)
+            else if s == -1 and high >= L - tol and close < L
+                bearRT := addTo(bearRT, nm)
+                st.set(i, 0)
+        // Sweep / rejection: wick through the level, close back on the original side
+        if high >= L + syminfo.mintick and close < L and open < L and close[1] < L
+            bearSW := addTo(bearSW, nm)
+        if low <= L - syminfo.mintick and close > L and open > L and close[1] > L
+            bullSW := addTo(bullSW, nm)
+
+recent = time >= timenow - sigDays * 86400000
+
+bullTxt = ""
+bullTip = ""
+if showRT and bullRT != ""
+    bullTxt := addTo(bullTxt, "RT")
+    bullTip += "▲ Bullish break & retest: " + bullRT + "\nOld resistance is holding as support. Long idea, stop below the level.\n"
+if showSW and bullSW != ""
+    bullTxt := addTo(bullTxt, "SW")
+    bullTip += "▲ Bullish sweep: " + bullSW + "\nWicked below and reclaimed (stops taken). Long idea, stop below the wick.\n"
+if showBRK and brkUp != ""
+    bullTxt := addTo(bullTxt, "BRK")
+    bullTip += "▲ Break above: " + brkUp + "\nWait for a hold or retest before chasing.\n"
+
+bearTxt = ""
+bearTip = ""
+if showRT and bearRT != ""
+    bearTxt := addTo(bearTxt, "RT")
+    bearTip += "▼ Bearish break & retest: " + bearRT + "\nOld support is now resistance. Short idea, stop above the level.\n"
+if showSW and bearSW != ""
+    bearTxt := addTo(bearTxt, "SW")
+    bearTip += "▼ Bearish sweep: " + bearSW + "\nWicked above and rejected (failed breakout). Short idea, stop above the wick.\n"
+if showBRK and brkDn != ""
+    bearTxt := addTo(bearTxt, "BRK")
+    bearTip += "▼ Break below: " + brkDn + "\nWait for a hold or retest before chasing.\n"
+
+if recent and bullTxt != ""
+    label.new(bar_index, low, bullTxt, yloc = yloc.belowbar, style = label.style_label_up, color = supCol, textcolor = color.white, size = size.tiny, tooltip = bullTip)
+if recent and bearTxt != ""
+    label.new(bar_index, high, bearTxt, yloc = yloc.abovebar, style = label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny, tooltip = bearTip)
+
+if useAlert and bullTip != ""
+    alert(syminfo.ticker + " " + fmt(close) + "\n" + bullTip, alert.freq_once_per_bar_close)
+if useAlert and bearTip != ""
+    alert(syminfo.ticker + " " + fmt(close) + "\n" + bearTip, alert.freq_once_per_bar_close)
+
+// ═════════════════════════ MOVING AVERAGES ═════════════════════════
+plot(showE9 ? e9 : na, "EMA 9", e9Col, 1)
+plot(showE20 ? e20 : na, "EMA 20", e20Col, 1)
+plot(showS200 ? s200 : na, "SMA 200", s200Col, 2)
+
+// ═════════════════════════ DRAW LEVELS (last bar only) ═════════════════════════
+var line[]  lines = array.new<line>()
+var label[] lbls  = array.new<label>()
+
+if barstate.islast
+    for l in lines
+        l.delete()
+    lines.clear()
+    for b in lbls
+        b.delete()
+    lbls.clear()
+
+    float[] vp = array.new_float()
+    int[]   vi = array.new_int()
+    for i = 0 to N - 1
+        float L = lv.get(i)
+        bool farAway = maxDistK > 0 and not na(dAtr) and math.abs(L - close) > maxDistK * dAtr
+        if en.get(i) and not na(L) and not farAway
+            vp.push(L)
+            vi.push(i)
+
+    if vp.size() > 0
+        int[] order_ = vp.sort_indices(order.descending)
+        float mergeTol = na(dAtr) ? 0.0 : mergeK * dAtr
+        int x1 = math.max(0, bar_index - lineLen)
+        int x2 = bar_index + rOffset
+        bool byRole = colorMode == "Role (support / resistance)"
+
+        string gTxt = ""
+        string gTip = ""
+        float  gPx  = na
+        color  gCol = na
+        for k = 0 to order_.size() - 1
+            int   j  = order_.get(k)
+            int   i  = vi.get(j)
+            float L  = vp.get(j)
+            int   t  = typeOf(i)
+            bool  above = close >= L
+            color c  = byRole ? (above ? supCol : resCol) : typeColor(t)
+            lines.push(line.new(x1, L, x2, L, color = c, style = typeStyle(t), width = t == 3 ? 2 : 1))
+
+            string nm = NAMES.get(i)
+            if not na(gPx) and math.abs(gPx - L) <= mergeTol
+                gTxt += " · " + nm
+                gTip += "\n\n────────\n" + playbook(i, nm, above)
+            else
+                if not na(gPx)
+                    lbls.push(label.new(x2, gPx, gTxt + (showPx ? "  " + fmt(gPx) : ""), style = label.style_label_left, color = gCol, textcolor = color.white, size = toSize(lblSzStr), tooltip = gTip))
+                gTxt := nm
+                gTip := playbook(i, nm, above)
+                gPx  := L
+                gCol := c
+        if not na(gPx)
+            lbls.push(label.new(x2, gPx, gTxt + (showPx ? "  " + fmt(gPx) : ""), style = label.style_label_left, color = gCol, textcolor = color.white, size = toSize(lblSzStr), tooltip = gTip))
+
+// ═════════════════════════ BIAS / CONTEXT TABLE ═════════════════════════
+tPos = switch tblPos
+    "Top left"     => position.top_left
+    "Bottom right" => position.bottom_right
+    "Bottom left"  => position.bottom_left
+    => position.top_right
+var table tbl = table.new(tPos, 2, 4, bgcolor = color.new(#131722, 10), frame_width = 0, border_width = 0)
+
+if showTbl and barstate.islast
+    tsz = toSize(tblSzStr)
+    txtC = color.white
+    dimC = color.new(color.white, 40)
+
+    // Bias score
+    int emaS = e9 > e20 and close > e9 ? 1 : e9 < e20 and close < e9 ? -1 : 0
+    int smaS = na(s200) ? 0 : close > s200 ? 1 : -1
+    int pdS  = na(pdh) or na(pdl) ? 0 : close > pdh ? 1 : close < pdl ? -1 : 0
+    int orS  = orDone ? (close > orH ? 1 : close < orL ? -1 : 0) : 0
+    int score = emaS + smaS + pdS + orS
+    string biasTxt = score >= 2 ? "BULLISH" : score <= -2 ? "BEARISH" : "NEUTRAL"
+    color  biasCol = score >= 2 ? supCol : score <= -2 ? resCol : #787b86
+    string biasTip = "Score " + str.tostring(score) + " (from -4 to +4)\n" +
+         "EMA 9/20: " + (emaS == 1 ? "stacked bull, price above" : emaS == -1 ? "stacked bear, price below" : "mixed") + "\n" +
+         "SMA 200: " + (smaS == 1 ? "price above" : smaS == -1 ? "price below" : "n/a") + "\n" +
+         "Prior day: " + (pdS == 1 ? "above PDH" : pdS == -1 ? "below PDL" : "inside range") + "\n" +
+         "Opening range: " + (not orDone ? "not set yet" : orS == 1 ? "above ORH" : orS == -1 ? "below ORL" : "inside") + "\n\n" +
+         "Bullish → favor longs at support (RT / SW below). Bearish → favor shorts at resistance. Neutral → rotation, fade the edges or wait."
+
+    tbl.cell(0, 0, "Bias", text_color = dimC, text_size = tsz, text_halign = text.align_left)
+    tbl.cell(1, 0, biasTxt, text_color = color.white, bgcolor = biasCol, text_size = tsz, tooltip = biasTip)
+
+    if tblMode == "Full"
+        // Nearest levels above and below (all enabled levels, ignoring the distance filter)
+        float upPx = na
+        float dnPx = na
+        string upNm = ""
+        string dnNm = ""
+        int upI = -1
+        int dnI = -1
+        for i = 0 to N - 1
+            float L = lv.get(i)
+            if en.get(i) and not na(L)
+                if L > close and (na(upPx) or L < upPx)
+                    upPx := L
+                    upNm := NAMES.get(i)
+                    upI := i
+                if L <= close and (na(dnPx) or L > dnPx)
+                    dnPx := L
+                    dnNm := NAMES.get(i)
+                    dnI := i
+        string upTxt = na(upPx) ? "—" : upNm + " " + fmt(upPx) + "  +" + fmt(upPx - close)
+        string dnTxt = na(dnPx) ? "—" : dnNm + " " + fmt(dnPx) + "  -" + fmt(close - dnPx)
+        tbl.cell(0, 1, "▲ Res", text_color = resCol, text_size = tsz, text_halign = text.align_left)
+        tbl.cell(1, 1, upTxt, text_color = txtC, text_size = tsz, text_halign = text.align_right, tooltip = upI >= 0 ? playbook(upI, upNm, false) : "")
+        tbl.cell(0, 2, "▼ Sup", text_color = supCol, text_size = tsz, text_halign = text.align_left)
+        tbl.cell(1, 2, dnTxt, text_color = txtC, text_size = tsz, text_halign = text.align_right, tooltip = dnI >= 0 ? playbook(dnI, dnNm, true) : "")
+
+        // What to look for right now
+        float dUp = na(upPx) ? na : upPx - close
+        float dDn = na(dnPx) ? na : close - dnPx
+        bool nearUp = not na(dUp) and dUp <= nearK * atr and (na(dDn) or dUp <= dDn)
+        bool nearDn = not na(dDn) and dDn <= nearK * atr and not nearUp
+        string tip = ""
+        string tipLong = ""
+        if nearUp
+            tip := "At " + upNm + ": break & hold = long, reject = short"
+            tipLong := playbook(upI, upNm, false)
+        else if nearDn
+            tip := "At " + dnNm + ": hold = long, lose it = short"
+            tipLong := playbook(dnI, dnNm, true)
+        else if showATH and not na(athRef) and close > athRef
+            tip := "Above ATH: price discovery, buy dips"
+            tipLong := "Price is trading above the prior all-time high. There is no overhead supply, so favor longs on pullbacks / retests of the old ATH. If price closes back below the ATH, the breakout has failed."
+        else if pdS == 1
+            tip := "Above PDH: trend up, PDH = support"
+            tipLong := "Price accepted above the prior-day high. Trend-day conditions: buy pullbacks into PDH / EMAs. Back inside the range = failed breakout."
+        else if pdS == -1
+            tip := "Below PDL: trend down, PDL = resistance"
+            tipLong := "Price accepted below the prior-day low. Trend-day conditions: sell rallies into PDL / EMAs. Back inside the range = failed breakdown."
+        else
+            tip := "Inside PD range: rotation, fade the edges"
+            tipLong := "Price is inside the prior-day range. Expect rotation between levels. Fade tests of PDH / PDL (look for SW) unless a break holds with a retest (RT)."
+        tbl.cell(0, 3, "Look", text_color = dimC, text_size = tsz, text_halign = text.align_left)
+        tbl.cell(1, 3, tip, text_color = txtC, text_size = tsz, text_halign = text.align_right, tooltip = tipLong)
+    else
+        for r = 1 to 3
+            tbl.cell(0, r, "")
+            tbl.cell(1, r, "")
