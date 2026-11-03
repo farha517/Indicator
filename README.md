@@ -26,14 +26,23 @@ Intraday futures indicator, in two versions:
 3. **ATH price:** type the real all-time high. Left at 0, the line shows the highest loaded bar and is labelled `HH`.
 4. If labels don't appear to the right of the last candle, set **Label offset** to 0.
 
-## Trade plan & patience (built in)
-- **Strict confirmation** (default): the signal candle must close in the top 40% (long) / bottom 40% (short) of its range,
-  on volume at least 1.2x the 20-bar average. Works on 2m and 5m (all distances scale with ATR).
-- **A+ setups only** (default): a signal is shown only if it agrees with the bias score **and** TP1 is at least **1.5R** away.
-  Marker text: `A+ SW PDL 2.1R` = grade, setup, level, reward:risk to TP1.
-- When an A+ setup fires, the chart draws **LONG/SHORT entry**, **SL** (just past the signal candle's wick) and **TP1/TP2** (the next key levels).
-  After TP1 is hit the label changes to **SL → BE** (move stop to entry). The plan disappears when stopped out, TP2 hits, or after 48 bars.
-- The coach label tells you what to do right now: `Mid-range: NO TRADE, wait for a level`, `At PDH: wait SW → short`, `In plan: respect SL, no adding`.
+## How it talks to you (one instruction at a time)
+| Label | Meaning |
+|---|---|
+| `WAIT ▸ no level nearby` | Mid-range. Do nothing. |
+| `WAIT ▸ at PDH, watching for a setup` | Price is at a level. Still do nothing. |
+| `SETUP FORMING ▸ wait for close 1:42` | A setup may be building. **Don't enter**, wait for the candle to close. |
+| `GO LONG ▸ up to 28240 · SL 28228 · 3 MNQ ($72)` | Valid entry. Shaded box = entry zone. Valid for 3 candles. |
+| `MISSED ▸ don't chase` | Price left the entry zone. Let it go. |
+| `MANAGE ▸ SL … · TP1 … · no new entries` | In a trade. Hold, no adding. |
+| `TP1 HIT ▸ stop to entry, hold for TP2` | Take partials, move stop to break-even. |
+| `DONE FOR TODAY ▸ 2 losses` | Stop trading until the next session (6pm ET). |
+
+- Only **A+** setups: agree with the bias, ≥1.5R to TP1, strong close + above-average volume, and the stop fits your risk.
+- One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
+- The daily stop counts the indicator's own setups (stopped out before TP1), not your account fills.
+- **Chart mode: Minimal** (default) shows the 2 nearest levels above/below, VWAP, today's signals and the plan.
+  **Full** shows every level, EMA 9/20 and SMA 200.
 
 ## Playbook (what to look for)
 | Situation | Bullish | Bearish |

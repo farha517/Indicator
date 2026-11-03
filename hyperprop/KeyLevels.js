@@ -30,7 +30,11 @@ const orMins   = input.int('Opening range minutes', 15, { min: 1, max: 120 });
 const rthOpen  = input.select('RTH open (NY time)', '09:30', ['09:30', '08:30', '09:00', '10:00']);
 const rthClose = input.select('RTH close (NY time)', '16:00', ['16:00', '16:15', '15:00', '17:00']);
 
-// ── Moving averages ──
+// ── Chart mode ──
+const chartMode = input.select('Chart mode', 'Minimal', ['Minimal', 'Full']);
+const nearestN = input.int('Minimal: levels shown above/below', 2, { min: 1, max: 5 });
+
+// ── Moving averages (shown in Full mode) ──
 const showE9   = input.bool('EMA 9', true);
 const e9Col    = input.color('EMA 9 color', '#00bcd4');
 const showE20  = input.bool('EMA 20', true);
@@ -73,6 +77,14 @@ const minRR    = input.float('Min reward:risk to TP1', 1.5, { min: 0.5, max: 10,
 const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.1, { min: 0, max: 2, step: 0.05 });
 const planBars = input.int('Keep plan on chart (bars)', 48, { min: 5, max: 500 });
 
+// ── Risk (prop account) ──
+const riskUsd  = input.float('Risk per trade ($)', 75, { min: 5, max: 10000, step: 5 });
+const contract = input.select('Contract', 'MNQ', ['MNQ', 'NQ', 'MES', 'ES', 'M2K', 'RTY', 'MYM', 'YM', 'MGC', 'GC', 'MCL', 'CL']);
+const maxQty   = input.int('Max contracts', 5, { min: 1, max: 100 });
+const maxLoss  = input.int('Daily stop: losses', 2, { min: 1, max: 10 });
+const entryBars = input.int('Entry valid for (bars after signal)', 3, { min: 1, max: 20 });
+const zoneR    = input.float('Entry zone (x risk past entry)', 0.3, { min: 0.05, max: 1, step: 0.05 });
+
 // ── Coach label ──
 const showInfo = input.bool('Bias / what-to-do label', true);
 const nearK    = input.float("'At a level' distance (x ATR 14)", 1, { min: 0, max: 10, step: 0.25 });
@@ -84,6 +96,7 @@ const NAMES = ['PDH', 'PDL', 'PWH', 'PWL', 'PMH', 'PML', 'ATH', 'ONH', 'ONL', 'O
 const TYPES = [0, 0, 1, 1, 2, 2, 3, 4, 4, 4, 4, 0, 0, 5]; // 0 day, 1 week, 2 month, 3 ATH, 4 session, 5 VWAP
 const VW = 13;   // VWAP moves every bar (dynamic level)
 const DAY = 86400000;
+const POINT_VALUE = { MNQ: 2, NQ: 20, MES: 5, ES: 50, M2K: 5, RTY: 50, MYM: 0.5, YM: 5, MGC: 10, GC: 100, MCL: 100, CL: 1000 };
 
 function on(v) { return v === true || v === 'On'; }
 function hhmm(s) { const p = String(s).split(':'); return (+p[0]) * 60 + (+p[1]); }
@@ -292,29 +305,49 @@ function compute(bars, inputs, hp) {
     const rr = Math.abs(t1.x - entry) / risk;
     const sc = scoreAt(i).score;
     const aligned = dir > 0 ? sc >= 1 : sc <= -1;
-    const grade = aligned && rr >= minRR ? 'A+' : rr >= minRR ? 'B' : 'C';
-    return { i, dir, entry, stop, t1, t2, rr, grade };
+    const pv = POINT_VALUE[contract] || 2;
+    const qty = Math.min(maxQty, Math.floor(riskUsd / (risk * pv) + 1e-9));
+    const grade = qty < 1 ? 'C' : aligned && rr >= minRR ? 'A+' : rr >= minRR ? 'B' : 'C';
+    return { i, dir, entry, stop, t1, t2, rr, grade, risk, qty, usd: qty * risk * pv };
   };
 
   // Strict confirmation: candle closes strong in the signal direction, on above-average volume
-  const confirm = (i, dir) => {
+  const confirm = (i, dir, live) => {
     if (!on(strict)) return true;
     const rng = H[i] - L[i];
     if (rng <= 0) return false;
     const pos = (C[i] - L[i]) / rng;                  // 0 = closed at low, 1 = closed at high
     const strong = dir > 0 ? pos >= 1 - closeK : pos <= closeK;
-    const volOk = !hasVol || volK <= 0 || isNaN(avgVol[i]) || V[i] >= avgVol[i] * volK;
+    const volOk = live || !hasVol || volK <= 0 || isNaN(avgVol[i]) || V[i] >= avgVol[i] * volK;
     return strong && volOk;
   };
 
+  // Resolve how a plan played out using bars up to `upto`
+  const resolve = (p, upto) => {
+    let tp1 = false;
+    for (let j = p.i + 1; j <= upto; j++) {
+      if (j - p.i > planBars) return tp1 ? 'win' : 'expired';
+      const sl = tp1 ? p.entry : p.stop;
+      if (p.dir > 0 ? L[j] <= sl : H[j] >= sl) return tp1 ? 'be' : 'loss';
+      if (p.dir > 0 ? H[j] >= p.t2.x : L[j] <= p.t2.x) return 'win';
+      if (!tp1 && (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x)) tp1 = true;
+    }
+    return tp1 ? 'tp1' : 'open';
+  };
+  const isOpen = st => st === 'open' || st === 'tp1';
+  const lossesOn = (day, upto) => plans.filter(p => dayKeyA[p.i] === day && resolve(p, upto) === 'loss').length;
+
   // ── Signals ──
   const markers = [];
-  let plan = null;
+  const plans = [];
+  let forming = null;
   const lastSig = new Array(NAMES.length).fill(-1e9);
   const state = new Array(NAMES.length).fill(0), stBar = new Array(NAMES.length).fill(0), lastLv = new Array(NAMES.length).fill(NaN);
-  const firstSigDay = dayKeyA[last] - sigDays + 1;
+  const minimal = chartMode === 'Minimal';
+  const firstSigDay = dayKeyA[last] - (minimal ? 1 : sigDays) + 1;
 
-  for (let i = 1; i < last; i++) {                    // skip the live (unfinished) bar
+  for (let i = 1; i <= last; i++) {
+    const live = i === last;                          // unfinished bar: only "forming", never a signal
     const tol = (atr[i] || 0) * tolK;
     let bull = [], bear = [], bullNm = [], bearNm = [];
     for (let k = 0; k < NAMES.length; k++) {
@@ -325,44 +358,43 @@ function compute(bars, inputs, hp) {
       const xp = k === VW && !isNaN(lv[k][i - 1]) ? lv[k][i - 1] : x;   // level on the previous bar
       const nm = nameOf(k);
       const ready = i - lastSig[k] > coolBars;      // one signal per level per cooldown
-      const fire = (arr, arrNm, tag) => { if (ready) { arr.push(tag); arrNm.push(nm); lastSig[k] = i; } };
+      const fire = (arr, arrNm, tag) => { if (ready) { arr.push(tag); arrNm.push(nm); if (!live) lastSig[k] = i; } };
       const up = C[i] > x && C[i - 1] <= xp, dn = C[i] < x && C[i - 1] >= xp;
-      if (up) { state[k] = 1; stBar[k] = i; if (on(showBRK)) fire(bull, bullNm, 'BRK'); }
-      else if (dn) { state[k] = -1; stBar[k] = i; if (on(showBRK)) fire(bear, bearNm, 'BRK'); }
+      if (up) { if (!live) { state[k] = 1; stBar[k] = i; } }
+      else if (dn) { if (!live) { state[k] = -1; stBar[k] = i; } }
       else if (state[k] !== 0 && i - stBar[k] > rtBars) state[k] = 0;
-      else if (state[k] === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x && confirm(i, 1)) { state[k] = 0; if (on(showRT)) fire(bull, bullNm, 'RT'); }
-      else if (state[k] === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x && confirm(i, -1)) { state[k] = 0; if (on(showRT)) fire(bear, bearNm, 'RT'); }
+      else if (state[k] === 1 && i - stBar[k] >= 2 && L[i] <= x + tol && C[i] > x && confirm(i, 1, live)) { if (!live) state[k] = 0; if (on(showRT)) fire(bull, bullNm, 'RT'); }
+      else if (state[k] === -1 && i - stBar[k] >= 2 && H[i] >= x - tol && C[i] < x && confirm(i, -1, live)) { if (!live) state[k] = 0; if (on(showRT)) fire(bear, bearNm, 'RT'); }
       if (on(showSW)) {
         const minWick = (atr[i] || 0) * swMinK;
-        if (H[i] - x >= minWick && H[i] > x && C[i] < x && O[i] < x && C[i - 1] < xp && confirm(i, -1)) fire(bear, bearNm, 'SW');
-        if (x - L[i] >= minWick && L[i] < x && C[i] > x && O[i] > x && C[i - 1] > xp && confirm(i, 1)) fire(bull, bullNm, 'SW');
+        if (H[i] - x >= minWick && H[i] > x && C[i] < x && O[i] < x && C[i - 1] < xp && confirm(i, -1, live)) fire(bear, bearNm, 'SW');
+        if (x - L[i] >= minWick && L[i] < x && C[i] > x && O[i] > x && C[i - 1] > xp && confirm(i, 1, live)) fire(bull, bullNm, 'SW');
       }
     }
-    if (dayKeyA[i] < firstSigDay) continue;
+
     const uniq = a => Array.from(new Set(a));
     for (const [dir, tags, nms] of [[1, bull, bullNm], [-1, bear, bearNm]]) {
       if (!tags.length) continue;
-      const onlyBrk = tags.every(t => t === 'BRK');
-      const pl = onlyBrk ? null : planFor(i, dir);
-      if (pl && aOnly && pl.grade !== 'A+') continue;
-      const txt = (dir > 0 ? '▲ ' : '▼ ') + (pl ? pl.grade + ' ' : '') + uniq(tags).join(' ') + ' ' + uniq(nms)[0] + (pl ? ' ' + pl.rr.toFixed(1) + 'R' : '');
+      const pl = planFor(i, dir);
+      if (aOnly && pl.grade !== 'A+') continue;
+      // patience rules: one trade at a time, and stop for the day after N losses
+      const prev = plans[plans.length - 1];
+      if (prev && isOpen(resolve(prev, i))) continue;
+      if (lossesOn(dayKeyA[i], i) >= maxLoss) continue;
+      Object.assign(pl, { tag: uniq(tags).join(' '), lvl: uniq(nms)[0] });
+      if (live) { forming = pl; continue; }
+      plans.push(pl);
+      if (dayKeyA[i] < firstSigDay) continue;
       const col = dir > 0 ? supCol : resCol;
+      const txt = (dir > 0 ? '▲ ' : '▼ ') + pl.grade + ' ' + pl.tag + ' ' + pl.lvl + ' ' + pl.rr.toFixed(1) + 'R';
       markers.push({ x: i, y: dir > 0 ? L[i] : H[i], position: dir > 0 ? 'below' : 'above', color: col, text: txt, textColor: col });
-      if (pl && (pl.grade === 'A+' || !aOnly)) plan = Object.assign(pl, { tag: uniq(tags).join(' '), lvl: uniq(nms)[0] });
     }
   }
 
-  // Track the latest plan: stopped out, TP1 hit, or done
-  if (plan) {
-    plan.status = 'open';
-    for (let j = plan.i + 1; j <= last; j++) {
-      const hitStop = plan.dir > 0 ? L[j] <= (plan.status === 'tp1' ? plan.entry : plan.stop) : H[j] >= (plan.status === 'tp1' ? plan.entry : plan.stop);
-      if (hitStop) { plan.status = plan.status === 'tp1' ? 'be' : 'stopped'; break; }
-      if (plan.dir > 0 ? H[j] >= plan.t2.x : L[j] <= plan.t2.x) { plan.status = 'tp2'; break; }
-      if (plan.status === 'open' && (plan.dir > 0 ? H[j] >= plan.t1.x : L[j] <= plan.t1.x)) plan.status = 'tp1';
-    }
-    if (last - plan.i > planBars || plan.status === 'stopped' || plan.status === 'tp2' || plan.status === 'be') plan = null;
-  }
+  // Current plan (latest one, if still open)
+  let plan = plans[plans.length - 1] || null;
+  if (plan) { plan.status = resolve(plan, last); if (!isOpen(plan.status)) plan = null; }
+  const lossesToday = lossesOn(dayKeyA[last], last);
 
   // ── Level lines + merged labels (current values only) ──
   const lines = [], labels = [];
@@ -375,6 +407,22 @@ function compute(bars, inputs, hp) {
     vis.push({ k, x });
   }
   vis.sort((a, b) => b.x - a.x);
+  if (chartMode === 'Minimal') {
+    const tolM = mergeK * dAtr;
+    const pick = side => {
+      const arr = vis.filter(v => v.k !== VW && (side > 0 ? v.x > px : v.x <= px)).sort((a, b) => Math.abs(a.x - px) - Math.abs(b.x - px));
+      const keep = [];
+      for (const v of arr) {
+        const groups = new Set(keep.map(q => q.g));
+        const g = keep.find(q => Math.abs(q.x - v.x) <= tolM);
+        if (g) keep.push({ ...v, g: g.g });
+        else if (groups.size < nearestN) keep.push({ ...v, g: keep.length });
+      }
+      return keep;
+    };
+    const keepSet = new Set([...pick(1), ...pick(-1)].map(v => v.k));
+    for (let j = vis.length - 1; j >= 0; j--) if (vis[j].k !== VW && !keepSet.has(vis[j].k)) vis.splice(j, 1);
+  }
   const x1 = Math.max(0, last - lineLen), x2 = last + rOffset;
   const typeCol = t => [dCol, wCol, mCol, athCol, sCol, vwCol][t];
   const typeStyle = t => (t === 1 ? 'dashed' : t === 2 || t === 4 ? 'dotted' : 'solid');
@@ -396,31 +444,46 @@ function compute(bars, inputs, hp) {
 
   // ── Moving averages (hp helpers) ──
   const plots = [];
-  if (on(showE9)) plots.push({ title: 'EMA 9', values: e9, color: e9Col, width: 1 });
-  if (on(showE20)) plots.push({ title: 'EMA 20', values: e20, color: e20Col, width: 1 });
-  if (on(showS200)) plots.push({ title: 'SMA 200', values: s200, color: s200Col, width: 2 });
+  const full = chartMode === 'Full';
+  if (full && on(showE9)) plots.push({ title: 'EMA 9', values: e9, color: e9Col, width: 1 });
+  if (full && on(showE20)) plots.push({ title: 'EMA 20', values: e20, color: e20Col, width: 1 });
+  if (full && on(showS200)) plots.push({ title: 'SMA 200', values: s200, color: s200Col, width: 2 });
   if (on(showVW) && intraday) plots.push({ title: 'VWAP', values: vwap.map((v, i) => (vwBarsA[i] <= 1 ? null : v)), color: vwCol, width: 2 });
 
-  // ── Trade plan lines (latest open A+ setup) ──
+  const rgba = (hex, a) => {
+    const h = String(hex).replace('#', '');
+    if (h.length < 6) return hex;
+    return 'rgba(' + parseInt(h.slice(0, 2), 16) + ',' + parseInt(h.slice(2, 4), 16) + ',' + parseInt(h.slice(4, 6), 16) + ',' + a + ')';
+  };
+  const boxes = [];
+  const sizeTxt = p => p.qty + ' ' + contract + ' ($' + Math.round(p.usd) + ')';
+
+  // ── Trade plan: entry zone, stop, targets ──
+  let zoneEdge = NaN, inZone = false, age = 0;
   if (on(showPlan) && plan) {
     const d = plan.dir, a = Math.max(1, plan.i), sl = plan.status === 'tp1' ? plan.entry : plan.stop;
+    age = last - plan.i;
+    zoneEdge = plan.entry + d * plan.risk * zoneR;
+    zoneEdge = d > 0 ? Math.ceil(zoneEdge / tick - 1e-9) * tick : Math.floor(zoneEdge / tick + 1e-9) * tick;
+    inZone = d > 0 ? px <= zoneEdge && px > plan.stop : px >= zoneEdge && px < plan.stop;
+    if (age <= entryBars && plan.status === 'open') {
+      boxes.push({ x1: a, y1: plan.entry - d * plan.risk * 0.05, x2: x2, y2: zoneEdge, bg: rgba(d > 0 ? supCol : resCol, 0.18), border: rgba(d > 0 ? supCol : resCol, 0.5), borderWidth: 1 });
+    }
     const pts = v => fmt(Math.abs(v - plan.entry), tick);
     const row = (y, col, style, text) => {
       lines.push({ x1: a, y1: y, x2: x2, y2: y, color: col, width: 2, style });
       labels.push({ x: x2, y, text, color: col, textColor: '#ffffff', anchor: 'right' });
     };
-    row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + plan.grade + ' ' + fmt(plan.entry, tick));
-    row(sl, resCol, 'solid', plan.status === 'tp1' ? 'SL → BE' : 'SL -' + pts(sl));
-    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 +' + pts(plan.t1.x) + ' ' + plan.rr.toFixed(1) + 'R');
-    row(plan.t2.x, supCol, 'dotted', 'TP2 +' + pts(plan.t2.x) + ' ' + (Math.abs(plan.t2.x - plan.entry) / Math.abs(plan.entry - plan.stop)).toFixed(1) + 'R');
+    row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + fmt(plan.entry, tick) + ' · ' + sizeTxt(plan));
+    row(sl, resCol, 'solid', plan.status === 'tp1' ? 'SL → BE' : 'SL ' + fmt(sl, tick) + ' (-' + pts(sl) + ')');
+    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 ' + fmt(plan.t1.x, tick) + ' (' + plan.rr.toFixed(1) + 'R)');
+    row(plan.t2.x, supCol, 'dotted', 'TP2 ' + fmt(plan.t2.x, tick) + ' (' + (Math.abs(plan.t2.x - plan.entry) / plan.risk).toFixed(1) + 'R)');
   }
 
-  // ── Coach label: bias + what to do (or wait) ──
+  // ── Coach: ONE clear instruction ──
   if (on(showInfo)) {
     const { score } = scoreAt(last);
-    const bias = score >= 2 ? 'BULL' : score <= -2 ? 'BEAR' : 'NEUTRAL';
-    const biasCol = score >= 2 ? supCol : score <= -2 ? resCol : '#787b86';
-
+    const bias = score >= 2 ? 'bull' : score <= -2 ? 'bear' : 'neutral';
     let up = null, dn = null;
     for (let k = 0; k < NAMES.length; k++) {
       const x = lv[k][last];
@@ -429,21 +492,30 @@ function compute(bars, inputs, hp) {
       if (x <= px && (!dn || x > dn.x)) dn = { k, x };
     }
     const near = (atr[last] || 0) * nearK;
-    const nearUp = up && up.x - px <= near && (!dn || up.x - px <= px - dn.x);
-    const nearDn = !nearUp && dn && px - dn.x <= near;
-    let tip;
-    if (on(showPlan) && plan) tip = plan.status === 'tp1' ? 'TP1 hit: stop to entry, let it run' : 'In plan: respect SL, no adding';
-    else if (nearUp) {
-      const nm = nameOf(up.k);
-      tip = score >= 2 ? 'At ' + nm + ': wait break + RT → long' : score <= -2 ? 'At ' + nm + ': wait SW → short' : 'At ' + nm + ': wait SW (short) or RT (long)';
-    } else if (nearDn) {
-      const nm = nameOf(dn.k);
-      tip = score <= -2 ? 'At ' + nm + ': wait break + RT → short' : score >= 2 ? 'At ' + nm + ': wait SW/RT → long' : 'At ' + nm + ': wait SW (long) or RT (short)';
-    } else tip = 'Mid-range: NO TRADE, wait for a level';
+    const atLvl = up && up.x - px <= near && (!dn || up.x - px <= px - dn.x) ? up : dn && px - dn.x <= near ? dn : null;
+
+    let countdown = '';
+    try {
+      const rem = Math.round((tms[last] + barMs - Date.now()) / 1000);
+      if (rem > 0 && rem <= barMs / 1000) countdown = ' ' + Math.floor(rem / 60) + ':' + String(rem % 60).padStart(2, '0');
+    } catch (e) { /* no clock available */ }
+
+    const GREY = '#616161', AMBER = '#ff8f00';
+    let text, col;
+    if (plan && on(showPlan)) {
+      const side = plan.dir > 0 ? 'LONG' : 'SHORT', sc = plan.dir > 0 ? supCol : resCol;
+      if (plan.status === 'tp1') { text = 'TP1 HIT ▸ stop to entry, hold for TP2 ' + fmt(plan.t2.x, tick); col = sc; }
+      else if (age <= entryBars && inZone) { text = 'GO ' + side + ' ▸ ' + (plan.dir > 0 ? 'up to ' : 'down to ') + fmt(zoneEdge, tick) + ' · SL ' + fmt(plan.stop, tick) + ' · ' + sizeTxt(plan); col = sc; }
+      else if (age <= entryBars) { text = 'MISSED ▸ don\'t chase'; col = GREY; }
+      else { text = 'MANAGE ▸ SL ' + fmt(plan.stop, tick) + ' · TP1 ' + fmt(plan.t1.x, tick) + ' · no new entries'; col = GREY; }
+    } else if (lossesToday >= maxLoss) { text = 'DONE FOR TODAY ▸ ' + lossesToday + ' losses. Close the chart.'; col = resCol; }
+    else if (forming) { text = 'SETUP FORMING (' + (forming.dir > 0 ? 'long' : 'short') + ' ' + forming.lvl + ') ▸ wait for close' + countdown; col = AMBER; }
+    else if (atLvl) { text = 'WAIT ▸ at ' + nameOf(atLvl.k) + ', watching for a setup (' + bias + ')'; col = GREY; }
+    else { text = 'WAIT ▸ no level nearby (' + bias + ')'; col = GREY; }
 
     let top = -Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) top = Math.max(top, H[i]);
-    labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text: bias + ' ' + (score > 0 ? '+' : '') + score + ' ▸ ' + tip, color: biasCol, textColor: '#ffffff', anchor: 'down' });
+    labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text, color: col, textColor: '#ffffff', anchor: 'down' });
   }
 
   if (on(debug) || !timeOk) {
@@ -451,5 +523,5 @@ function compute(bars, inputs, hp) {
     labels.push({ x: last, y: L[last] - (atr[last] || 0) * 3, text: 'time=' + JSON.stringify(t0) + ' (' + typeof t0 + ') ms=' + tms[last] + ' days=' + (timeOk ? new Set(dayKeyA).size : 'n/a') + ' BRK=' + JSON.stringify(showBRK), color: '#424242', textColor: '#ffffff', anchor: 'up' });
   }
 
-  return { plots, lines, labels, markers };
+  return { plots, lines, labels, markers, boxes };
 }
