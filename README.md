@@ -13,7 +13,7 @@ Intraday futures indicator, in two versions:
 - **Colors:** green = price above the level (support), red = price below (resistance).
   Line style = timeframe: day solid, week dashed, month dotted, ATH thick, ON/OR dotted grey.
 - **Signals:** three trend-following setups (PB, RT, SW, below), each scored on your own chart data. Closed candles only.
-- **One instruction at a time** above price (WAIT / FORMING / GO / MISSED / MANAGE / DONE) and a per-setup stats line below.
+- **One instruction at a time** above price (WAIT / FORMING / GO / MISSED / MANAGE / SIT OUT) and a per-setup stats line below.
 - **Chart mode: Minimal** (default) shows only the 2 nearest levels above/below, VWAP, today's signals and the trade plan. **Full** adds every level and EMA 9/20 + SMA 200.
 
 ## Hyperprop setup
