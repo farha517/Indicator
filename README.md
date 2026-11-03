@@ -41,6 +41,7 @@ Intraday futures indicator, in two versions:
 - Only **A+** setups: agree with the bias, ≥1.5R to TP1, strong close + above-average volume, and the stop fits your risk.
 - One trade at a time. Size = $75 ÷ (stop in points × $ per point), capped at 5 contracts. Set **Contract** (MNQ, NQ, MES, ES …).
 - The daily stop counts the indicator's own setups (stopped out before TP1), not your account fills.
+- **Stats line** (bottom): how the A+ setups did on the loaded history: count, % that hit TP1, average R and total R in $ (half off at TP1, rest at TP2 or break-even).
 - **Chart mode: Minimal** (default) shows the 2 nearest levels above/below, VWAP, today's signals and the plan.
   **Full** shows every level, EMA 9/20 and SMA 200.
 

@@ -88,6 +88,7 @@ const zoneR    = input.float('Entry zone (x risk past entry)', 0.3, { min: 0.05,
 // ── Coach label ──
 const showInfo = input.bool('Bias / what-to-do label', true);
 const nearK    = input.float("'At a level' distance (x ATR 14)", 1, { min: 0, max: 10, step: 0.25 });
+const showStats = input.bool('Stats line (how A+ setups did)', true);
 const debug    = input.bool('Debug info', false);
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -396,6 +397,21 @@ function compute(bars, inputs, hp) {
   if (plan) { plan.status = resolve(plan, last); if (!isOpen(plan.status)) plan = null; }
   const lossesToday = lossesOn(dayKeyA[last], last);
 
+  // Result of a finished plan in R: half off at TP1 (stop to entry), rest at TP2 / BE / expiry close
+  const resultR = p => {
+    let tp1 = false;
+    const r1 = p.rr, r2 = Math.abs(p.t2.x - p.entry) / p.risk;
+    for (let j = p.i + 1; j <= last; j++) {
+      if (j - p.i > planBars) { const rest = (C[j - 1] - p.entry) * p.dir / p.risk; return { r: tp1 ? 0.5 * r1 + 0.5 * Math.max(0, rest) : rest, tp1 }; }
+      const sl = tp1 ? p.entry : p.stop;
+      if (p.dir > 0 ? L[j] <= sl : H[j] >= sl) return { r: tp1 ? 0.5 * r1 : -1, tp1 };
+      if (p.dir > 0 ? H[j] >= p.t2.x : L[j] <= p.t2.x) return { r: tp1 ? 0.5 * r1 + 0.5 * r2 : r2, tp1: true };
+      if (!tp1 && (p.dir > 0 ? H[j] >= p.t1.x : L[j] <= p.t1.x)) tp1 = true;
+    }
+    return null;   // still open
+  };
+  const done = plans.map(resultR).filter(Boolean);
+
   // ── Level lines + merged labels (current values only) ──
   const lines = [], labels = [];
   const px = C[last];
@@ -516,6 +532,18 @@ function compute(bars, inputs, hp) {
     let top = -Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) top = Math.max(top, H[i]);
     labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text, color: col, textColor: '#ffffff', anchor: 'down' });
+  }
+
+  if (on(showStats)) {
+    let bot = Infinity;
+    for (let i = Math.max(0, last - 20); i <= last; i++) bot = Math.min(bot, L[i]);
+    let text;
+    if (!done.length) text = 'Stats: no finished A+ setups in loaded history yet';
+    else {
+      const hit = done.filter(d => d.tp1).length, tot = done.reduce((a, d) => a + d.r, 0);
+      text = 'Stats: ' + done.length + ' setups · ' + Math.round(100 * hit / done.length) + '% hit TP1 · avg ' + (tot >= 0 ? '+' : '') + (tot / done.length).toFixed(2) + 'R · total ' + (tot >= 0 ? '+' : '') + tot.toFixed(1) + 'R ($' + Math.round(tot * riskUsd) + ')';
+    }
+    labels.push({ x: last, y: bot - (atr[last] || 0) * 1.5, text, color: '#37474f', textColor: '#ffffff', anchor: 'up' });
   }
 
   if (on(debug) || !timeOk) {
