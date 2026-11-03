@@ -59,9 +59,17 @@ const sigDays  = input.int('Show signals from last N days', 3, { min: 1, max: 60
 const coolBars = input.int('Cooldown per level (bars)', 12, { min: 0, max: 500 });
 const swMinK   = input.float('Sweep min wick past level (x ATR 14)', 0.15, { min: 0, max: 5, step: 0.05 });
 
-// ── Bias label ──
-const showInfo = input.bool('Bias / what-to-look-for label', true);
+// ── Trade plan ──
+const showPlan = input.bool('Trade plan (entry / stop / targets)', true);
+const aOnly    = input.bool('A+ setups only (with bias + min R:R)', true);
+const minRR    = input.float('Min reward:risk to TP1', 1.5, { min: 0.5, max: 10, step: 0.25 });
+const stopBufK = input.float('Stop buffer past wick (x ATR 14)', 0.1, { min: 0, max: 2, step: 0.05 });
+const planBars = input.int('Keep plan on chart (bars)', 48, { min: 5, max: 500 });
+
+// ── Coach label ──
+const showInfo = input.bool('Bias / what-to-do label', true);
 const nearK    = input.float("'At a level' distance (x ATR 14)", 1, { min: 0, max: 10, step: 0.25 });
+const debug    = input.bool('Debug info', false);
 
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -92,8 +100,17 @@ function compute(bars, inputs, hp) {
   const empty = { plots: [] };
   if (n < 2) return empty;
 
-  // Time in ms (accepts seconds or ms)
-  const tms = bars.map(b => (b.time < 1e12 ? b.time * 1000 : b.time));
+  // Time in ms — accepts seconds, ms, µs, ns, Date objects or date strings
+  const toMs = t => {
+    if (t instanceof Date) return t.getTime();
+    if (typeof t === 'string') { const num = Number(t); t = isNaN(num) ? Date.parse(t) : num; }
+    if (typeof t !== 'number' || !isFinite(t)) return NaN;
+    while (t > 1e14) t /= 1000;
+    if (t < 1e11) t *= 1000;
+    return t;
+  };
+  const tms = bars.map(b => toMs(b.time != null ? b.time : b.t));
+  const timeOk = isFinite(tms[n - 1]) && isFinite(tms[0]);
   const H = bars.map(b => b.h), L = bars.map(b => b.l), C = bars.map(b => b.c), O = bars.map(b => b.o);
 
   // Tick size estimate (smallest non-zero price step in recent closes)
@@ -150,6 +167,7 @@ function compute(bars, inputs, hp) {
     const wk = Math.floor((dk + 3) / 7);              // weeks start Monday (Sun evening → Mon)
     const mk = td.getUTCFullYear() * 12 + td.getUTCMonth();
     dayKeyA[i] = dk;
+    if (!timeOk) continue;
 
     if (dk !== dKey) {
       if (dKey !== null) {
@@ -211,8 +229,49 @@ function compute(bars, inputs, hp) {
     return true;
   }
 
+  // ── Moving averages + per-bar bias score (−4…+4) ──
+  const e9 = hp.ema(C, 9), e20 = hp.ema(C, 20), s200 = hp.sma(C, 200);
+  const num = v => (v == null || isNaN(v) ? NaN : v);
+  const scoreAt = i => {
+    const a = num(e9[i]), b = num(e20[i]), s = num(s200[i]), c = C[i];
+    const emaS = a > b && c > a ? 1 : a < b && c < a ? -1 : 0;
+    const smaS = isNaN(s) ? 0 : c > s ? 1 : -1;
+    const ph = lv[0][i], pl = lv[1][i];
+    const pdS = isNaN(ph) || isNaN(pl) ? 0 : c > ph ? 1 : c < pl ? -1 : 0;
+    const oh = lv[9][i], ol = lv[10][i];
+    const orS = orDoneA[i] && !isNaN(oh) ? (c > oh ? 1 : c < ol ? -1 : 0) : 0;
+    return { score: emaS + smaS + pdS + orS, pdS };
+  };
+
+  // Build a trade plan for a signal: stop past the wick, targets = next levels
+  const planFor = (i, dir) => {
+    const a = atr[i] || 0;
+    const entry = C[i];
+    let stop = dir > 0 ? L[i] - a * stopBufK : H[i] + a * stopBufK;
+    if (Math.abs(entry - stop) < a * 0.2) stop = entry - dir * a * 0.2;
+    stop = dir > 0 ? Math.floor(stop / tick + 1e-9) * tick : Math.ceil(stop / tick - 1e-9) * tick;
+    const risk = Math.abs(entry - stop);
+    const tg = [];
+    for (let k = 0; k < NAMES.length; k++) {
+      const x = lv[k][i];
+      if (isNaN(x)) continue;
+      if (dir > 0 ? x > entry + a * 0.1 : x < entry - a * 0.1) tg.push({ x, nm: nameOf(k) });
+    }
+    tg.sort((p, q) => (dir > 0 ? p.x - q.x : q.x - p.x));
+    const uniqT = [];
+    for (const t of tg) if (!uniqT.length || Math.abs(t.x - uniqT[uniqT.length - 1].x) > a * 0.25) uniqT.push(t);
+    const t1 = uniqT[0] || { x: entry + dir * risk * 2, nm: '2R' };
+    const t2 = uniqT[1] || { x: entry + dir * Math.max(risk * 3, Math.abs(t1.x - entry) * 1.5), nm: '3R' };
+    const rr = Math.abs(t1.x - entry) / risk;
+    const sc = scoreAt(i).score;
+    const aligned = dir > 0 ? sc >= 1 : sc <= -1;
+    const grade = aligned && rr >= minRR ? 'A+' : rr >= minRR ? 'B' : 'C';
+    return { i, dir, entry, stop, t1, t2, rr, grade };
+  };
+
   // ── Signals ──
   const markers = [];
+  let plan = null;
   const lastSig = new Array(NAMES.length).fill(-1e9);
   const state = new Array(NAMES.length).fill(0), stBar = new Array(NAMES.length).fill(0), lastLv = new Array(NAMES.length).fill(NaN);
   const firstSigDay = dayKeyA[last] - sigDays + 1;
@@ -241,8 +300,28 @@ function compute(bars, inputs, hp) {
     }
     if (dayKeyA[i] < firstSigDay) continue;
     const uniq = a => Array.from(new Set(a));
-    if (bull.length) markers.push({ x: i, y: L[i], position: 'below', color: supCol, text: uniq(bull).join(' ') + ' ' + uniq(bullNm).join('/'), textColor: supCol });
-    if (bear.length) markers.push({ x: i, y: H[i], position: 'above', color: resCol, text: uniq(bear).join(' ') + ' ' + uniq(bearNm).join('/'), textColor: resCol });
+    for (const [dir, tags, nms] of [[1, bull, bullNm], [-1, bear, bearNm]]) {
+      if (!tags.length) continue;
+      const onlyBrk = tags.every(t => t === 'BRK');
+      const pl = onlyBrk ? null : planFor(i, dir);
+      if (pl && aOnly && pl.grade !== 'A+') continue;
+      const txt = (pl ? pl.grade + ' ' : '') + uniq(tags).join(' ') + ' ' + uniq(nms)[0] + (pl ? ' ' + pl.rr.toFixed(1) + 'R' : '');
+      const col = dir > 0 ? supCol : resCol;
+      markers.push({ x: i, y: dir > 0 ? L[i] : H[i], position: dir > 0 ? 'below' : 'above', color: col, text: txt, textColor: col });
+      if (pl && (pl.grade === 'A+' || !aOnly)) plan = Object.assign(pl, { tag: uniq(tags).join(' '), lvl: uniq(nms)[0] });
+    }
+  }
+
+  // Track the latest plan: stopped out, TP1 hit, or done
+  if (plan) {
+    plan.status = 'open';
+    for (let j = plan.i + 1; j <= last; j++) {
+      const hitStop = plan.dir > 0 ? L[j] <= (plan.status === 'tp1' ? plan.entry : plan.stop) : H[j] >= (plan.status === 'tp1' ? plan.entry : plan.stop);
+      if (hitStop) { plan.status = plan.status === 'tp1' ? 'be' : 'stopped'; break; }
+      if (plan.dir > 0 ? H[j] >= plan.t2.x : L[j] <= plan.t2.x) { plan.status = 'tp2'; break; }
+      if (plan.status === 'open' && (plan.dir > 0 ? H[j] >= plan.t1.x : L[j] <= plan.t1.x)) plan.status = 'tp1';
+    }
+    if (last - plan.i > planBars || plan.status === 'stopped' || plan.status === 'tp2' || plan.status === 'be') plan = null;
   }
 
   // ── Level lines + merged labels (current values only) ──
@@ -276,25 +355,31 @@ function compute(bars, inputs, hp) {
   flush();
 
   // ── Moving averages (hp helpers) ──
-  const e9 = hp.ema(C, 9), e20 = hp.ema(C, 20), s200 = hp.sma(C, 200);
   const plots = [];
   if (on(showE9)) plots.push({ title: 'EMA 9', values: e9, color: e9Col, width: 1 });
   if (on(showE20)) plots.push({ title: 'EMA 20', values: e20, color: e20Col, width: 1 });
   if (on(showS200)) plots.push({ title: 'SMA 200', values: s200, color: s200Col, width: 2 });
 
-  // ── Bias + what to look for ──
+  // ── Trade plan lines (latest open A+ setup) ──
+  if (on(showPlan) && plan) {
+    const d = plan.dir, a = Math.max(1, plan.i), sl = plan.status === 'tp1' ? plan.entry : plan.stop;
+    const pts = v => fmt(Math.abs(v - plan.entry), tick);
+    const row = (y, col, style, text) => {
+      lines.push({ x1: a, y1: y, x2: x2, y2: y, color: col, width: 2, style });
+      labels.push({ x: x2, y, text, color: col, textColor: '#ffffff', anchor: 'right' });
+    };
+    row(plan.entry, '#9e9e9e', 'dashed', (d > 0 ? 'LONG ' : 'SHORT ') + plan.grade + ' ' + fmt(plan.entry, tick));
+    row(sl, resCol, 'solid', plan.status === 'tp1' ? 'SL → BE' : 'SL -' + pts(sl));
+    if (plan.status !== 'tp1') row(plan.t1.x, supCol, 'solid', 'TP1 +' + pts(plan.t1.x) + ' ' + plan.rr.toFixed(1) + 'R');
+    row(plan.t2.x, supCol, 'dotted', 'TP2 +' + pts(plan.t2.x) + ' ' + (Math.abs(plan.t2.x - plan.entry) / Math.abs(plan.entry - plan.stop)).toFixed(1) + 'R');
+  }
+
+  // ── Coach label: bias + what to do (or wait) ──
   if (on(showInfo)) {
-    const a = e9[last], b = e20[last], s = s200[last];
-    const pdh = lv[0][last], pdl = lv[1][last], orH = lv[9][last], orL = lv[10][last];
-    const emaS = a > b && px > a ? 1 : a < b && px < a ? -1 : 0;
-    const smaS = s == null || isNaN(s) ? 0 : px > s ? 1 : -1;
-    const pdS = isNaN(pdh) || isNaN(pdl) ? 0 : px > pdh ? 1 : px < pdl ? -1 : 0;
-    const orS = orDoneA[last] && !isNaN(orH) ? (px > orH ? 1 : px < orL ? -1 : 0) : 0;
-    const score = emaS + smaS + pdS + orS;
-    const bias = score >= 2 ? 'BULLISH' : score <= -2 ? 'BEARISH' : 'NEUTRAL';
+    const { score } = scoreAt(last);
+    const bias = score >= 2 ? 'BULL' : score <= -2 ? 'BEAR' : 'NEUTRAL';
     const biasCol = score >= 2 ? supCol : score <= -2 ? resCol : '#787b86';
 
-    // nearest levels (all enabled, ignoring distance filter)
     let up = null, dn = null;
     for (let k = 0; k < NAMES.length; k++) {
       const x = lv[k][last];
@@ -303,18 +388,26 @@ function compute(bars, inputs, hp) {
       if (x <= px && (!dn || x > dn.x)) dn = { k, x };
     }
     const near = (atr[last] || 0) * nearK;
+    const nearUp = up && up.x - px <= near && (!dn || up.x - px <= px - dn.x);
+    const nearDn = !nearUp && dn && px - dn.x <= near;
     let tip;
-    if (up && up.x - px <= near && (!dn || up.x - px <= px - dn.x)) tip = 'At ' + nameOf(up.k) + ' (res): break & hold = long, reject = short';
-    else if (dn && px - dn.x <= near) tip = 'At ' + nameOf(dn.k) + ' (sup): hold = long, lose it = short';
-    else if (athIsReal && px > lv[6][last]) tip = 'Above ATH: price discovery, buy dips';
-    else if (pdS === 1) tip = 'Above PDH: trend up, PDH = support';
-    else if (pdS === -1) tip = 'Below PDL: trend down, PDL = resistance';
-    else tip = 'Inside PD range: rotation, fade the edges';
-    const rs = (up ? '▲ ' + nameOf(up.k) + ' +' + fmt(up.x - px, tick) : '') + (up && dn ? '  ' : '') + (dn ? '▼ ' + nameOf(dn.k) + ' -' + fmt(px - dn.x, tick) : '');
+    if (on(showPlan) && plan) tip = plan.status === 'tp1' ? 'TP1 hit: stop to entry, let it run' : 'In plan: respect SL, no adding';
+    else if (nearUp) {
+      const nm = nameOf(up.k);
+      tip = score >= 2 ? 'At ' + nm + ': wait break + RT → long' : score <= -2 ? 'At ' + nm + ': wait SW → short' : 'At ' + nm + ': wait SW (short) or RT (long)';
+    } else if (nearDn) {
+      const nm = nameOf(dn.k);
+      tip = score <= -2 ? 'At ' + nm + ': wait break + RT → short' : score >= 2 ? 'At ' + nm + ': wait SW/RT → long' : 'At ' + nm + ': wait SW (long) or RT (short)';
+    } else tip = 'Mid-range: NO TRADE, wait for a level';
 
     let top = -Infinity;
     for (let i = Math.max(0, last - 20); i <= last; i++) top = Math.max(top, H[i]);
-    labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text: bias + ' ' + (score > 0 ? '+' : '') + score + ' · ' + tip + (rs ? ' · ' + rs : ''), color: biasCol, textColor: '#ffffff', anchor: 'down' });
+    labels.push({ x: last, y: top + (atr[last] || 0) * 1.5, text: bias + ' ' + (score > 0 ? '+' : '') + score + ' ▸ ' + tip, color: biasCol, textColor: '#ffffff', anchor: 'down' });
+  }
+
+  if (on(debug) || !timeOk) {
+    const t0 = bars[last].time;
+    labels.push({ x: last, y: L[last] - (atr[last] || 0) * 3, text: 'time=' + JSON.stringify(t0) + ' (' + typeof t0 + ') ms=' + tms[last] + ' days=' + (timeOk ? new Set(dayKeyA).size : 'n/a') + ' BRK=' + JSON.stringify(showBRK), color: '#424242', textColor: '#ffffff', anchor: 'up' });
   }
 
   return { plots, lines, labels, markers };

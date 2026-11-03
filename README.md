@@ -26,6 +26,13 @@ Intraday futures indicator, in two versions:
 3. **ATH price:** type the real all-time high. Left at 0, the line shows the highest loaded bar and is labelled `HH`.
 4. If labels don't appear to the right of the last candle, set **Label offset** to 0.
 
+## Trade plan & patience (built in)
+- **A+ setups only** (default): a signal is shown only if it agrees with the bias score **and** TP1 is at least **1.5R** away.
+  Marker text: `A+ SW PDL 2.1R` = grade, setup, level, reward:risk to TP1.
+- When an A+ setup fires, the chart draws **LONG/SHORT entry**, **SL** (just past the signal candle's wick) and **TP1/TP2** (the next key levels).
+  After TP1 is hit the label changes to **SL → BE** (move stop to entry). The plan disappears when stopped out, TP2 hits, or after 48 bars.
+- The coach label tells you what to do right now: `Mid-range: NO TRADE, wait for a level`, `At PDH: wait SW → short`, `In plan: respect SL, no adding`.
+
 ## Playbook (what to look for)
 | Situation | Bullish | Bearish |
 |---|---|---|
