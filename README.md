@@ -8,13 +8,10 @@ Intraday futures indicator, in two versions:
 | `KeyLevels.pine` | TradingView Pine v6 |
 
 ## What it shows
-- **Levels:** PDH/PDL, prior-day close (PDC) and 50% (PD50), VWAP (resets 6pm ET), PWH/PWL, PMH/PML, ATH, overnight high/low (ONH/ONL, 6pm ET → RTH open), opening range (ORH/ORL)
-- **Moving averages:** EMA 9, EMA 20, SMA 200 (always used for the trend filters; drawn in Full mode)
-- **Colors:** green = price above the level (support), red = price below (resistance).
-  Line style = timeframe: day solid, week dashed, month dotted, ATH thick, ON/OR dotted grey.
-- **Signals:** three trend-following setups (PB, RT, SW, below), each scored on your own chart data. Closed candles only.
-- **One instruction at a time** above price (WAIT / FORMING / GO / MISSED / MANAGE / SIT OUT) and a per-setup stats line below.
-- **Chart mode: Minimal** (default) shows only the 2 nearest levels above/below, VWAP, today's signals and the trade plan. **Full** adds every level and EMA 9/20 + SMA 200.
+- **Strategy: swing break + Fair Value Gap (FVG)** — see below. Each setup is drawn as a box with entry, stop and target.
+- **Key levels:** the 2 nearest above/below of PDH/PDL, PDC, PD50, ONH/ONL, ORH/ORL, PWH/PWL, PMH/PML, ATH. VWAP optional (off).
+- **Stats line:** how every FVG setup on the loaded history played out.
+- Colors: green = price above the level (support), red = below (resistance).
 
 ## Hyperprop setup
 1. New script → Name `Key Levels` → Pane **Overlay** → paste `hyperprop/KeyLevels.js` over the template → **Save & add to chart**.
@@ -23,40 +20,28 @@ Intraday futures indicator, in two versions:
 3. **ATH price:** type the real all-time high. Left at 0, the line shows the highest loaded bar and is labelled `HH`.
 4. If labels don't appear to the right of the last candle, set **Label offset** to 0.
 
-## The three setups (all trade WITH the trend)
-| Setup | What happens | Trend filter |
-|---|---|---|
-| **PB** pullback | Price dips to VWAP or EMA 20, then a strong candle closes back with the trend | EMA 9 > EMA 20, EMA 20 rising, price above VWAP (mirror for shorts) |
-| **RT** retest | Price breaks a key level, comes back to it, holds, strong close | Same short-term trend as PB |
-| **SW** sweep | Price wicks through a key level and closes back (stop run) | 200 SMA rising and price above it (mirror for shorts) |
+## The FVG setup (rules)
+1. **Swings:** 15m swing highs/lows (a 15m candle higher/lower than the 2 candles on each side), built from your 1–3m chart.
+   The current unbroken ones show as dashed `15m High` / `15m Low` lines.
+2. **Break:** a candle on your chart **closes** past the swing (a wick alone doesn't count).
+3. **Trend filter:** only in the 15m trend direction — the trend is set by the last **15m candle close** past a 15m swing.
+4. **FVG:** the first 3-candle gap in that move (within 6 candles of the break), at least 0.15× the average candle size.
+   Bullish gap = candle 3's low is above candle 1's high; bearish = candle 3's high is below candle 1's low.
+5. **Order:** limit at **50% of the gap**, **stop** 2 ticks past **candle 1**, **take profit 2R** (full exit).
+   Size = risk $ ÷ (stop points × $ per point), capped at Max contracts.
+6. **Cancel** if not filled within **15 minutes**, or if price reaches the target first.
 
-Every signal also needs a strong close (top/bottom 40% of the candle, in the trade direction) and volume ≥1.2x average.
-Evening (6pm–midnight ET) is stricter: top/bottom 30% and volume ≥1.5x. Midnight–9:30am: no signals.
-
-## Each setup has to prove itself
-The stats line scores every setup separately on the history your chart has loaded, e.g. `PB ✓+$210/12 · RT test 4/10 · SW ✗-$150/11`:
-- **test 4/10** — fewer than 10 trades so far. Signals show grey as **SIM** (practice account only).
-- **✓** — 10+ trades and making money → signals show as **GO**.
-- **✗** — 10+ trades and losing → that setup is switched **off** automatically.
-
-## How it talks to you (one instruction at a time)
-| Label | What you do |
+## Reading the chart
+| On the chart | Meaning |
 |---|---|
-| `WAIT ▸ trend up: wait for a dip to VWAP/EMA` | Nothing yet — you know what you're waiting for |
-| `WAIT ▸ no trend, no level: sit on hands` | Nothing |
-| `WAIT ▸ outside your hours` | Nothing |
-| `FORMING PB long ▸ wait for close 1:42` | **Don't enter.** Wait for the candle to close |
-| `GO LONG PB ▸ up to 28240 · SL 28228 · 3 MNQ ($72)` | Enter. Shaded box = valid entry zone (3 candles) |
-| `SIM LONG PB ▸ …` | Same, but the setup is still in test — practice account only |
-| `MISSED ▸ don't chase` | Price left the zone. Let it go |
-| `MANAGE ▸ SL … · TP … · hands off` | In a trade. Let the stop or target do the work |
-| `SIT OUT ▸ 2 signals lost this session (choppy)` | The setups are failing in this market. Stop until the next session |
+| Box `FVG SELL` + `SELL LMT 29443.50 · 8 MNQ ($68) · until 7:15pm` | Place a sell limit at that price with that size, before that time |
+| `SL …` / `TP …` lines | Your stop and target — set them as bracket orders |
+| `FILLED SELL … · hands off` | Price came back and filled the order. Let SL or TP close it |
+| Faint boxes `WIN +2R` / `LOSS -1R` / `cancelled` | Today's earlier setups and how they ended |
+| `FVG: 23 filled · 48% win · +$540` | All setups in the loaded history. With a 2R target you need >33% wins to profit |
 
-- One trade at a time, max 3 signals per session; after 2 losing signals in a session it says SIT OUT.
-  Sessions: NY 9:30am–4pm and evening 6pm–midnight, counted separately.
-  **It counts its own signals — it can't see your account.** Keep your own count too: stop after 2 real losses.
-- One take profit at 1.5R, full exit. Stop just past the recent wick.
-- Size = $75 ÷ (stop points × $ per point), capped at 5 contracts.
+The indicator can't see your account; it tracks the setups as if each limit order was placed.
+More setups: turn off **Only trade with the swing-timeframe trend**, or set **Swing timeframe** to 5.
 
 ## Playbook (what to look for)
 | Situation | Bullish | Bearish |
