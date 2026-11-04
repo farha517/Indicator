@@ -43,18 +43,12 @@ Intraday futures indicator, in two versions:
 The indicator can't see your account; it tracks the setups as if each limit order was placed.
 More setups: turn off **Only trade with the swing-timeframe trend**, or set **Swing timeframe** to 5.
 
-## Playbook (what to look for)
-| Situation | Bullish | Bearish |
-|---|---|---|
-| Price below a level (resistance) | Break, close & hold above, then retest (`RT`) → long | Rejection / wick through and close back below (`SW`) → short, stop above wick |
-| Price above a level (support) | Pullback holds / retest (`RT`) → long, stop below | Close back below = failed breakout → short toward next level |
-| Inside prior-day range | Fade PDL toward PDH | Fade PDH toward PDL |
-| Outside prior-day range | Above PDH = trend up, buy pullbacks to PDH/EMAs | Below PDL = trend down, sell rallies to PDL/EMAs |
-| ONH / ONL | Sweeps of the overnight extremes in the first hour are common reversal spots | |
-| Opening range | OR break often sets the day's direction; a failed OR break often runs to the other side | |
-| ATH | Above = price discovery, no overhead supply; buy retests | Failed break back below ATH often reverses hard |
+## Using the key levels with FVG setups
+- An FVG that forms right after breaking **through** a key level (PDH/PDL, ONH/ONL) is usually stronger.
+- If the 2R target sits just past a key level in the way, expect a reaction there.
 
 ## Decluttering on mobile
 - Raise **Merge labels closer than** if labels overlap.
 - Set **Hide levels farther than** (e.g. 3) to drop distant levels.
-- Turn off the bias label, or reduce **Show signals from last N days** / raise **Cooldown per level**.
+- Keep **Show past setups from last N days** at 1 so only today's boxes show.
+- Turn off **Stats line** if you don't need it.
